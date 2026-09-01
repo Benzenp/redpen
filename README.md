@@ -16,7 +16,8 @@ The agent receives a self-contained task bundle containing screenshots, vector m
 - Automatic target-page refresh when a change enters review
 - CLI and MCP interfaces backed by the same daemon
 - English UI by default with a persistent Korean language switch
-- Compact retro desktop chrome inspired by classic paint utilities
+- Readable Windows 3.1 Paintbrush-inspired chrome with a docked toolbox,
+  functional menus, group palette, and status bar
 - Local workspace storage only; no database or cloud service
 
 ## Workflow
@@ -131,6 +132,26 @@ redpen open http://127.0.0.1:4173/
 
 ## Annotator
 
+### Session UI
+
+The annotator keeps the Windows 3.1 Paintbrush mood without sacrificing
+readability:
+
+- A navy title bar, menu bar, beveled controls, and sunken white input fields
+- A docked two-column toolbox that never covers the screenshot
+- A centered canvas with clear document boundaries and inactive-group dimming
+- Window-style instruction cards with visible active state, mark count, notes,
+  and reference-image drop zones
+- A status bar showing the current tool, active group, clickable group colors,
+  and zoom percentage
+- File, Edit, View, and Help menus for discoverable actions and shortcuts
+- English and Korean controls in the menu bar; Korean input surfaces retain
+  antialiased text for readability
+
+Click the zoom percentage or use **View → Fit to window** to restore the full
+screenshot view. **Help → Keyboard shortcuts** opens the complete shortcut
+reference inside the annotator.
+
 ### Instruction groups
 
 Every mark belongs to one numbered group. A group contains:
@@ -168,9 +189,14 @@ Click once for an immediately editable default text box. In Select/Move, double-
 | `Delete` / `Backspace` | Delete selected marks |
 | `Escape` | Cancel the current drawing or clear selection |
 | `1`–`9` | Switch instruction group without changing tools |
+| `N` | Create a new instruction group |
 | Hold `Space` + drag | Pan the canvas |
+| `+` / `-` | Zoom in / out |
+| `0` | Fit the screenshot to the window |
+| `F1` | Open the keyboard-shortcut dialog |
 | `Ctrl/Cmd + Z` | Undo |
 | `Ctrl/Cmd + Shift + Z` | Redo |
+| `Ctrl/Cmd + Enter` | Submit instructions (outside a text editor) |
 
 ### Select/Move
 

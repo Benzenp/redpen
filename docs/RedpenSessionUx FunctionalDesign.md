@@ -52,9 +52,9 @@ await page.addInitScript(`(${FREEZE_OVERLAY_SCRIPT_SOURCE})(${JSON.stringify(ove
 
 ### 어노테이션 UI (`apps/annotator/public/session.html`)
 
-- `#submit-overlay`: `position: fixed; inset: 0`, 어두운 배경, 체크마크 아이콘 + "제출 완료" + taskId + 안내 문구. 기본 `display: none`, `.visible` 클래스로 표시.
+- `#submit-overlay`: `position: fixed; inset: 0` 반투명 배경 위의 Win 3.1 모달 대화상자(`.dialog`) — 체크마크 아이콘 + "제출 완료" + sunken 필드의 taskId + 안내 문구. 기본 `hidden`, `hidden` 해제로 표시(§10).
 - 제출 버튼 핸들러가 `app.submit()` 성공 후 `showSubmitOverlayAndClose(result.taskId)` 호출.
-- `showSubmitOverlayAndClose`: 오버레이에 taskId 채우고 `.visible` 추가, 1.6초 후 `window.close()`. 스크립트가 열지 않은 탭에서 `window.close()`가 브라우저 정책상 no-op이 될 수 있음을 인지하고 있으나, Redpen이 여는 탭은 `context.newPage()` + `page.goto()`로 스크립트가 직접 연 탭이므로 이 경로에서는 정상 동작.
+- `showSubmitOverlayAndClose`: 오버레이에 taskId 채우고 `hidden`을 해제, 1.6초 후 `window.close()`. 스크립트가 열지 않은 탭에서 `window.close()`가 브라우저 정책상 no-op이 될 수 있음을 인지하고 있으나, Redpen이 여는 탭은 `context.newPage()` + `page.goto()`로 스크립트가 직접 연 탭이므로 이 경로에서는 정상 동작.
 
 ### 타겟 페이지 쪽 (`pollForSubmission`, 위 2번 참고)
 
@@ -259,3 +259,88 @@ Instruction Group의 `referenceIds`에 즉시 귀속되고 sidebar thumbnail로�
   그룹 3장 제한, self-contained task reference 파일을 검증한다.
 - `ui-e2e-check.ts`: line mark와 bounded/group-colored text 입력을 실제
   pointer/keyboard 이벤트로 검증한다.
+
+## 10. 현재 설계: 세션 UI 셸 (Win 3.1 Paintbrush 크롬)
+
+디자인 레퍼런스는 Windows 3.1 Paintbrush 창이다. 이전 구현은 모던 CSS 위에
+레트로 오버라이드를 덧칠한 2층 구조라, 회색 면 위의 회색 텍스트(`#a1a1aa`),
+회색 입력 필드(`#808080` textarea), 캔버스를 덮는 부유 툴바가 남아 가독성이
+나빴다. 크롬을 한 겹으로 다시 세우고 대비·배치를 레퍼런스 쪽으로 정렬했다.
+
+### 베벨/색 토큰 (`session.html`)
+
+- `--face #c0c0c0`, `--face-lt #dfdfdf`, `--hi #fff`, `--sh #808080`,
+  `--dsh #000`, `--field #fff`, `--navy #000080`, `--desktop #6e6e6e`.
+- raised = `border: 2px outset` + `inset 1px 1px 0 #fff, inset -1px -1px 0 #808080`,
+  sunken = `border: 2px inset` + `inset 1px 1px 0 #000, inset -1px -1px 0 #dfdfdf`.
+  `outset`/`inset` 키워드를 유지하는 이유는 `ui-e2e-check.ts`의 retro-chrome
+  검증이 `#toolbar`의 `border-style`을 실제로 읽기 때문이다.
+- 사용자가 글을 넣는 표면(그룹 노트, 전체 설명, reference zone)은 전부 흰
+  sunken 필드 + 검은 글자다. 비활성 텍스트는 Win 방식대로 `#808080` +
+  `text-shadow: 1px 1px 0 #fff`로 새긴다.
+- 크롬은 `-webkit-font-smoothing: none`(비트맵 느낌), `textarea/input/select`는
+  `antialiased` — 12px 한글이 안티앨리어싱 없이는 읽기 어렵다.
+
+### 레이아웃
+
+`#app`(세로 flex) = 타이틀바 → 메뉴바 → `#workspace`(툴박스 · 캔버스 · 사이드바)
+→ `#paint-statusbar`(`position: absolute; bottom: 0`).
+
+- 툴박스는 캔버스 **옆에 도킹**한다. 이전에는 `position: absolute`로 캔버스
+  좌상단을 덮어 검토 대상 화면의 헤더/로고를 가리고, 좌상단을 향한 포인터
+  이벤트를 삼켰다(그 때문에 e2e가 좌표를 우회하고 있었다).
+- 캔버스는 `fitToViewport()`에서 가운데 정렬한다(`panX`/`panY`). 예전에는 좌상단에
+  붙어 오른쪽에 죽은 회색 띠가 남았다. 렌더 시 스크린샷 둘레에 1px 검은 테두리를
+  그려 "책상 위의 문서"로 읽히게 한다.
+- 사이드바 폭 322px, 그룹/전체 설명은 `<fieldset class="panel">` groove 그룹박스.
+
+### 메뉴바 (신규)
+
+`MENUS` 테이블(File/Edit/View/Help)로 팝업을 생성한다. 항목마다 `enabled`를 열 때
+계산하므로 비활성 상태가 툴바 버튼과 항상 일치한다.
+
+- File: 새 지시(N), 지시 제출(Ctrl+Enter)
+- Edit: 되돌리기, 다시 실행, 선택 삭제(Del)
+- View: 확대(+), 축소(-), 창에 맞추기(0)
+- Help: 단축키 대화상자(F1)
+
+`SessionAnnotatorApp`에 `zoomBy(factor)`, `fitToView()`, `hasSelection()`,
+`deleteSelection()`을 추가했다. 줌은 이전까지 휠 전용이라 100%로 되돌릴 방법이
+아예 없었다. 언어 전환은 메뉴바 오른쪽 끝의 `[data-locale]` 버튼 두 개로 옮겨
+사이드바 상단 공간을 비웠다.
+
+### 상태바
+
+`[도구 · 활성 그룹] [그룹 색상 팔레트] [줌]`. 팔레트는 장식용 `<i>` 스와치가
+아니라 실제 그룹 스와치 버튼이다 — 클릭하면 그 그룹으로 focus하고, hover하면
+캔버스 하이라이트가 동기화된다. 줌 표시는 클릭하면 창에 맞춘다.
+뮤테이션이 끝나면 `setIdleStatus()`가 "저장 중..."을 도구·그룹 표시로 되돌린다.
+
+### 그룹 카드
+
+카드 자체가 작은 Win 창이다. 헤더 바가 활성일 때 `--navy`, 비활성일 때 `--sh`라
+어느 그룹이 활성인지 색만 봐도 구분된다. 헤더에 색 칩·번호·마크 수·빈 그룹 삭제
+버튼, 본문에 흰 노트 필드와 reference zone이 들어간다.
+
+### 입력 보존 (버그 수정)
+
+- `renderSidebar()`가 카드를 매번 새로 그리므로, 입력 중이던 노트의 캐럿과
+  아직 저장되지 않은 글자가 사라졌다. `captureNoteFocus()`/`restoreNoteFocus()`로
+  포커스·선택 범위·현재 값을 복원한다.
+- `#global-note`는 제출 시점에만 저장돼서, 노트를 쓴 뒤 마크를 하나 그리면
+  다음 렌더에서 통째로 지워졌다. 제출 전까지 DOM 값을 유지하도록 렌더는
+  **서버 값이 실제로 바뀐 경우에만** textarea에 써 넣고, 제출 핸들러가
+  `setGlobalNote()` 후 `submit()`을 순서대로 호출한다.
+- 그룹 노트/reference zone 클릭은 여전히 `focusGroup()` 팬을 막지만
+  `setActiveGroup()`은 호출한다. 붙여넣기는 활성 그룹에 붙으므로, 클릭한 카드가
+  활성이 되지 않으면 레퍼런스가 엉뚱한 그룹에 붙었다.
+- `selectTool()`은 `app.tool`이 실제로 바뀐 경우에만 활성 표시를 갱신한다
+  (저장 중에는 `setTool()`이 거부되므로 표시만 바뀌는 불일치가 있었다).
+
+### 검증
+
+- `ui-e2e-check.ts`, `patch-reference-e2e-check.ts`, `lifecycle-check.ts`,
+  `review-loop-check.ts`, `daemon-lifecycle-check.ts` 전부 ALL CHECKS PASSED.
+- `patch-reference-e2e-check.ts`의 마지막 사각형 제스처 좌표를 캔버스 안쪽으로
+  옮겼다. 툴박스 도킹으로 캔버스가 좁아져 예전 좌표(`box.x + 900`)는 사이드바에
+  떨어져 아무것도 그리지 않았고, 그 사실을 검증이 잡아내지 못하고 있었다.

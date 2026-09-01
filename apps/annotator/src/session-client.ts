@@ -16,6 +16,19 @@ export type ToolName = 'pen' | 'arrow' | 'line' | 'rectangle' | 'ellipse' | 'tex
 
 const ERASE_HIT_RADIUS_PX = 10;
 
+/** [english, korean] tool names for the status bar readout. */
+const TOOL_LABELS: Record<ToolName, readonly [string, string]> = {
+  select: ['Select / Move', '선택 / 이동'],
+  pen: ['Pen', '펜'],
+  arrow: ['Arrow', '화살표'],
+  line: ['Line', '직선'],
+  rectangle: ['Rectangle', '사각형'],
+  ellipse: ['Ellipse', '원'],
+  text: ['Text area', '텍스트 영역'],
+  mask: ['Mask', '가리기'],
+  erase: ['Eraser', '지우개'],
+};
+
 interface AnnotatorState {
   frameId: string;
   viewport: { width: number; height: number };
@@ -292,7 +305,7 @@ export class SessionAnnotatorApp {
         this.render();
         return;
       }
-      if ((event.key === 'Delete' || event.key === 'Backspace') && this.selectedMarkIds.size) { event.preventDefault(); void this.removeMarks([...this.selectedMarkIds]); this.selectedMarkIds.clear(); this.selectionBounds = null; return; }
+      if ((event.key === 'Delete' || event.key === 'Backspace') && this.selectedMarkIds.size) { event.preventDefault(); this.deleteSelection(); return; }
       if (event.key === 'Enter' && this.selectedMarkIds.size === 1) {
         const mark = this.state?.marks.find((candidate) => this.selectedMarkIds.has(candidate.id));
         if (mark?.type === 'text') { event.preventDefault(); this.openTextEditor(mark.bounds, mark); return; }
@@ -349,8 +362,42 @@ export class SessionAnnotatorApp {
     const availableWidth = canvas.clientWidth || this.state.viewport.width;
     const availableHeight = canvas.clientHeight || this.state.viewport.height;
     this.scale = Math.min(availableWidth / this.state.viewport.width, availableHeight / this.state.viewport.height, 1);
-    this.panX = 0;
-    this.panY = 0;
+    // Centered, not top-left pinned: a screenshot narrower than the canvas
+    // used to sit against the left edge with a dead gray band beside it,
+    // which reads like a broken layout rather than a document on a desk.
+    this.panX = Math.max(0, (availableWidth - this.state.viewport.width * this.scale) / 2);
+    this.panY = Math.max(0, (availableHeight - this.state.viewport.height * this.scale) / 2);
+  }
+
+  /** View menu / +,- keys: zoom around the middle of the visible canvas. */
+  zoomBy(factor: number): void {
+    const canvas = this.opts.canvas;
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const before = { x: (centerX - this.panX) / this.scale, y: (centerY - this.panY) / this.scale };
+    this.scale = Math.min(Math.max(this.scale * factor, 0.1), 8);
+    this.panX = centerX - before.x * this.scale;
+    this.panY = centerY - before.y * this.scale;
+    this.render();
+  }
+
+  /** View menu / 0 key / status-bar zoom readout: back to a full-page view. */
+  fitToView(): void {
+    this.fitToViewport();
+    this.render();
+  }
+
+  hasSelection(): boolean {
+    return this.selectedMarkIds.size > 0;
+  }
+
+  /** Edit menu counterpart of the Delete key. */
+  deleteSelection(): void {
+    if (this.selectedMarkIds.size === 0) return;
+    const ids = [...this.selectedMarkIds];
+    this.selectedMarkIds.clear();
+    this.selectionBounds = null;
+    void this.removeMarks(ids);
   }
 
   setTool(tool: ToolName): void {
@@ -359,7 +406,14 @@ export class SessionAnnotatorApp {
     this.cancelInteraction();
     this.tool = tool;
     this.opts.canvas.style.cursor = '';
-    this.setStatus(this.message(`${tool === 'select' ? 'Select / Move' : tool} — group ${this.state?.groups.find((group) => group.id === this.state?.activeGroupId)?.number ?? ''}`, `${tool === 'select' ? '선택 / 이동' : tool} — 그룹 ${this.state?.groups.find((group) => group.id === this.state?.activeGroupId)?.number ?? ''}`));
+    this.setIdleStatus();
+  }
+
+  /** Status-bar readout for "nothing is happening": current tool + group. */
+  private setIdleStatus(): void {
+    const groupNumber = this.state?.groups.find((group) => group.id === this.state?.activeGroupId)?.number ?? '';
+    const label = TOOL_LABELS[this.tool][this.locale === 'ko' ? 1 : 0];
+    this.setStatus(this.message(`${label} · Group #${groupNumber}`, `${label} · 그룹 #${groupNumber}`));
   }
 
   previewMaskOpacity(opacity: number): void {
@@ -1102,6 +1156,10 @@ export class SessionAnnotatorApp {
     const operation = this.mutationTail.then(mutation).finally(() => {
       this.pendingMutationCount--;
       this.opts.canvas.style.cursor = this.tool === 'select' ? 'default' : '';
+      // Leaving "Saving changes..." in the status bar forever made the app
+      // look stuck; once nothing is in flight the readout goes back to
+      // telling the user which tool and group they are working in.
+      if (this.pendingMutationCount === 0) this.setIdleStatus();
       this.onStateChange?.();
     });
     this.mutationTail = operation.then(
@@ -1297,6 +1355,13 @@ export class SessionAnnotatorApp {
     ctx.scale(this.scale, this.scale);
 
     ctx.drawImage(opts.screenshotImage, 0, 0, state.viewport.width, state.viewport.height);
+    // Hairline frame so the screenshot reads as a page sitting on the
+    // workspace instead of bleeding into the gray around it.
+    ctx.save();
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 1 / this.scale;
+    ctx.strokeRect(-0.5 / this.scale, -0.5 / this.scale, state.viewport.width + 1 / this.scale, state.viewport.height + 1 / this.scale);
+    ctx.restore();
 
     const colorByGroupId = new Map(state.groups.map((g) => [g.id, g.color] as const));
 

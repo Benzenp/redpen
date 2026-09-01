@@ -374,12 +374,18 @@ async function main() {
     );
 
     // --- ensure group #1 is non-empty for canSubmit, then submit ---
+    // Coordinates stay well inside the canvas: the toolbox is docked beside
+    // it now, so a gesture aimed past the canvas edge would silently land on
+    // the sidebar and draw nothing.
     await page.click('#toolbar button[data-tool="rectangle"]');
-    await page.mouse.move(box.x + 900, box.y + 700);
+    await page.mouse.move(box.x + 600, box.y + 700);
     await page.mouse.down();
-    await page.mouse.move(box.x + 950, box.y + 750, { steps: 5 });
+    await page.mouse.move(box.x + 650, box.y + 750, { steps: 5 });
     await page.mouse.up();
-    await page.waitForTimeout(200);
+    await page.waitForFunction(
+      () => (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ type: string }> } } })
+        .__redpenSessionApp.state.marks.some((mark) => mark.type === 'rectangle'),
+    );
 
     await page.click('#submit-button');
     await page.waitForSelector('#submit-status:has-text("Submitted")', { timeout: 5000 });

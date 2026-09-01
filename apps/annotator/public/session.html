@@ -4,47 +4,260 @@
   <meta charset="utf-8" />
   <title>Redpen — Annotate the screen</title>
   <style>
+    /*
+     * Win 3.1 Paintbrush-inspired chrome (docs reference:
+     * KakaoTalk_20260902_001940378.png) rebuilt for readability: one bevel
+     * system, real 3D edges, black-on-face text everywhere, white sunken
+     * fields for anything the user types into, and no floating panel that
+     * covers the screenshot being reviewed.
+     */
     :root {
+      --face: #c0c0c0;        /* button/window face */
+      --face-lt: #dfdfdf;     /* outer light edge */
+      --hi: #ffffff;          /* inner light edge */
+      --sh: #808080;          /* inner dark edge */
+      --dsh: #000000;         /* outer dark edge */
+      --field: #ffffff;       /* editable surface */
       --ink: #000000;
-      --muted: #71717a;
-      --faint: #a1a1aa;
-      --border: #e4e4e7;
-      --surface: #c0c0c0;
-      --canvas-bg: #808080;
-      --accent: #000080;
-      --danger: #dc2626;
-      --radius: 10px;
+      --ink-soft: #404040;    /* still >= 7:1 on the face color */
+      --navy: #000080;
+      --desktop: #6e6e6e;     /* area around the screenshot */
+      --danger: #800000;
+      --ok: #006000;
+      --chrome-font: "MS Sans Serif", "Microsoft Sans Serif", Tahoma, "Malgun Gothic", sans-serif;
     }
     * { box-sizing: border-box; }
     html, body {
       margin: 0;
       height: 100%;
       overflow: hidden;
-      font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
-      font-size: 13px;
+      background: #008080;
+      font-family: var(--chrome-font);
+      font-size: 12px;
+      line-height: 1.35;
       color: var(--ink);
-      -webkit-font-smoothing: antialiased;
+      -webkit-font-smoothing: none;
     }
-    #app { display: flex; height: 100%; }
+    /* User-authored text stays antialiased — Korean at 12px is unreadable
+       without it, and these are content surfaces, not chrome. */
+    textarea, input, select, .antialias { -webkit-font-smoothing: antialiased; }
 
-    /* ---------- canvas area ---------- */
-    #canvas-area {
-      flex: 1;
-      position: relative;
-      background: var(--canvas-bg);
-      overflow: hidden;
+    /* ---------- bevel system ---------- */
+    .raised {
+      border: 2px outset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh);
     }
+    .sunken {
+      border: 2px inset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--dsh), inset -1px -1px 0 var(--face-lt);
+    }
+    .etched {
+      border: 1px solid var(--sh);
+      box-shadow: 1px 1px 0 var(--hi) inset, -1px -1px 0 var(--hi);
+    }
+
+    /* ---------- app frame ---------- */
+    #app {
+      position: relative;
+      height: 100%;
+      padding-bottom: 26px; /* status bar rail */
+      display: flex;
+      flex-direction: column;
+      background: var(--face);
+      border: 2px outset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--hi);
+    }
+
     #paint-titlebar {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 22px;
-      padding: 3px 7px;
-      background: #000080;
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      height: 24px;
+      padding: 2px;
+      background: var(--navy);
       color: #fff;
-      font-weight: bold;
-      z-index: 6;
+      font-weight: 700;
+      user-select: none;
+    }
+    #paint-titlebar-text {
+      flex: 1;
+      text-align: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .titlebar-box {
+      width: 20px;
+      height: 18px;
+      flex: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--face);
+      color: var(--ink);
+      font-size: 9px;
+      line-height: 1;
+      border: 2px outset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh);
+    }
+    #titlebar-sysmenu::before {
+      content: '';
+      width: 10px;
+      height: 3px;
+      background: var(--ink);
+      box-shadow: 0 0 0 1px var(--face);
+    }
+    #titlebar-boxes { display: flex; gap: 2px; }
+
+    /* ---------- menu bar ---------- */
+    #menubar {
+      flex: none;
+      display: flex;
+      align-items: stretch;
+      height: 22px;
+      padding: 0 2px;
+      background: var(--face);
+      box-shadow: inset 0 -1px 0 var(--sh), 0 1px 0 var(--hi);
+      user-select: none;
+      z-index: 40;
+    }
+    .menu-title {
+      position: relative;
+      display: flex;
+      align-items: center;
+      padding: 0 9px;
+      border: 0;
+      background: transparent;
+      font: inherit;
+      color: var(--ink);
+      cursor: default;
+    }
+    .menu-title:hover, .menu-title[aria-expanded="true"] { background: var(--navy); color: #fff; }
+    .menu-spacer { flex: 1; }
+    .menu-lang {
+      display: flex;
+      align-items: center;
+      margin: 2px 2px 2px 3px;
+      padding: 0 8px;
+      border: 2px outset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh);
+      background: var(--face);
+      font: inherit;
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .menu-lang.active {
+      border-style: inset;
+      box-shadow: inset 1px 1px 0 var(--dsh), inset -1px -1px 0 var(--face-lt);
+      background: #fff;
+      font-weight: 700;
+    }
+    .menu-popup {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      min-width: 214px;
+      padding: 2px;
+      background: var(--face);
+      border: 2px outset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh), 3px 3px 0 rgba(0, 0, 0, 0.35);
+      color: var(--ink);
+      cursor: default;
+      z-index: 41;
+    }
+    .menu-popup[hidden] { display: none; }
+    .menu-item {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      width: 100%;
+      padding: 3px 10px 3px 18px;
+      border: 0;
+      background: transparent;
+      font: inherit;
+      color: var(--ink);
+      text-align: left;
+      cursor: default;
+      position: relative;
+    }
+    .menu-item .accel { margin-left: auto; }
+    .menu-item:hover:not([disabled]) { background: var(--navy); color: #fff; }
+    .menu-item[disabled] { color: var(--sh); text-shadow: 1px 1px 0 var(--hi); }
+    .menu-item.checked::before { content: '•'; position: absolute; left: 7px; font-weight: 700; }
+    .menu-sep { height: 2px; margin: 3px 1px; border-top: 1px solid var(--sh); border-bottom: 1px solid var(--hi); }
+
+    /* ---------- workspace ---------- */
+    #workspace { flex: 1; display: flex; min-height: 0; }
+
+    #toolbox {
+      flex: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 2px;
+      background: var(--face);
+    }
+    #toolbar {
+      display: grid;
+      grid-template-columns: repeat(2, 30px);
+      gap: 2px;
+      padding: 3px;
+      border: 2px outset var(--face-lt);
+      border-radius: 0;
+      box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh);
+      background: var(--face);
+    }
+    #toolbar button {
+      width: 30px;
+      height: 30px;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--face);
+      color: var(--ink);
+      border: 2px outset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh);
+      border-radius: 0;
+      cursor: pointer;
+    }
+    #toolbar button svg { width: 18px; height: 18px; }
+    #toolbar button:active,
+    #toolbar button.active {
+      border-style: inset;
+      box-shadow: inset 1px 1px 0 var(--dsh), inset -1px -1px 0 var(--face-lt);
+      background: #fff;
+      color: var(--navy);
+    }
+    #toolbar button.active { outline: 1px dotted var(--ink); outline-offset: -5px; }
+    #toolbar button:disabled { color: var(--sh); cursor: default; }
+    #toolbar .divider {
+      grid-column: 1 / -1;
+      height: 2px;
+      margin: 2px 0;
+      border-top: 1px solid var(--sh);
+      border-bottom: 1px solid var(--hi);
+    }
+    #toolbox-hint {
+      width: 68px;
+      padding: 2px 0;
+      text-align: center;
+      color: var(--ink-soft);
+      font-size: 10px;
+      line-height: 1.15;
+      word-break: keep-all;
+    }
+
+    #canvas-area {
+      position: relative;
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      background: var(--desktop);
+      border: 2px inset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--dsh);
     }
     #screenshot-source { display: none; }
     canvas { display: block; touch-action: none; }
@@ -53,507 +266,477 @@
     canvas.tool-erase { cursor: cell; }
     canvas.tool-select { cursor: default; }
 
-    #toolbar {
-      position: absolute;
-      top: 16px;
-      left: 16px;
-      display: flex;
-      gap: 2px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 4px;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-      z-index: 5;
-    }
-    #toolbar .divider {
-      width: 1px;
-      margin: 4px 3px;
-      background: var(--border);
-    }
-    #toolbar button {
-      width: 32px;
-      height: 32px;
-      border: none;
-      background: transparent;
-      border-radius: 6px;
-      cursor: pointer;
-      color: var(--ink);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.1s ease;
-    }
-    #toolbar button svg {
-      width: 17px;
-      height: 17px;
-    }
-    #toolbar button:hover { background: var(--canvas-bg); }
-    #toolbar button.active { background: var(--ink); color: white; }
-    #toolbar button:disabled { color: var(--faint); cursor: not-allowed; }
-    #toolbar button:disabled:hover { background: transparent; }
-
-    #zoom-indicator {
-      position: absolute;
-      bottom: 16px;
-      left: 16px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      padding: 4px 12px;
-      font-size: 12px;
-      color: var(--muted);
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-      z-index: 5;
-    }
-
-    /* ---------- sidebar ---------- */
-    #sidebar {
-      width: 360px;
-      background: var(--surface);
-      border-left: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-    }
-    #sidebar-scroll {
-      flex: 1;
-      overflow-y: auto;
-      padding: 20px 16px;
-    }
-    .language-switch {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 4px;
-      margin-bottom: 18px;
-      padding: 3px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: #f4f4f5;
-    }
-    .language-switch button {
-      border: 0;
-      border-radius: 6px;
-      padding: 6px;
-      background: transparent;
-      color: var(--muted);
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 600;
-    }
-    .language-switch button.active {
-      background: #fff;
-      color: var(--ink);
-      box-shadow: 0 1px 2px rgba(0,0,0,.08);
-    }
-    .section-label {
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.02em;
-      text-transform: uppercase;
-      color: var(--faint);
-      margin: 0 0 10px;
-    }
-    .section-label:not(:first-child) { margin-top: 24px; }
-
-    #new-instruction {
-      width: 100%;
-      padding: 8px 0;
-      margin-bottom: 12px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 13px;
-      color: var(--muted);
-      transition: border-color 0.1s ease, color 0.1s ease;
-    }
-    #new-instruction:hover { border-color: var(--ink); color: var(--ink); }
-
-    .group-card {
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px;
-      margin-bottom: 8px;
-      cursor: pointer;
-      background: var(--surface);
-      transition: border-color 0.1s ease;
-    }
-    .group-card.active { border-color: var(--ink); border-width: 1.5px; }
-    .group-card .head {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-bottom: 6px;
-    }
-    .group-card .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-    .group-card .number { font-weight: 600; font-size: 13px; }
-    .group-card .count { margin-left: auto; font-size: 11px; color: var(--faint); }
-    .group-card textarea {
-      width: 100%;
-      box-sizing: border-box;
-      resize: none;
-      min-height: 32px;
-      font-size: 12px;
-      font-family: inherit;
-      border: none;
-      background: var(--canvas-bg);
-      border-radius: 6px;
-      padding: 6px 8px;
-      color: var(--ink);
-    }
-    .group-card textarea::placeholder { color: var(--faint); }
-    .group-card textarea:focus { outline: 1px solid var(--border); }
-    .group-card .empty-warning {
-      color: var(--danger);
-      font-size: 11px;
-      margin-top: 6px;
-    }
-    .reference-zone {
-      min-height: 58px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px;
-      margin-top: 8px;
-      border: 1px dashed var(--border);
-      border-radius: 6px;
-      color: var(--faint);
-      font-size: 11px;
-    }
-    .reference-zone.drag-over { border-color: var(--ink); background: var(--canvas-bg); }
-    .reference-zone .reference-empty { flex: 1; text-align: center; }
-    .reference-thumb { position: relative; width: 54px; height: 44px; flex: 0 0 auto; }
-    .reference-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 4px; }
-    .reference-thumb button {
-      position: absolute; top: -5px; right: -5px; width: 16px; height: 16px;
-      border: 1px solid var(--border); border-radius: 50%; background: var(--surface);
-      color: var(--ink); padding: 0; line-height: 12px; cursor: pointer;
-    }
-    .reference-zone .reference-capacity { margin-left: auto; align-self: flex-end; }
-    .canvas-text-editor {
-      position: absolute;
-      z-index: 4;
-      resize: none;
-      overflow: hidden;
-      padding: 2px;
-      border: 1px solid var(--ink);
-      border-radius: 2px;
-      background: rgba(255, 255, 255, 0.92);
-      font: 14px sans-serif;
-      line-height: 1.25;
-      outline: none;
-    }
-
-    #global-note {
-      width: 100%;
-      box-sizing: border-box;
-      min-height: 52px;
-      font-family: inherit;
-      font-size: 12px;
-      padding: 8px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      resize: none;
-      color: var(--ink);
-    }
-    #global-note::placeholder { color: var(--faint); }
-
-    /* ---------- footer ---------- */
-    #sidebar-footer {
-      border-top: 1px solid var(--border);
-      padding: 14px 16px;
-    }
-    #submit-button {
-      width: 100%;
-      padding: 10px;
-      background: var(--ink);
-      color: white;
-      border: none;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 13px;
-      cursor: pointer;
-      transition: opacity 0.1s ease;
-    }
-    #submit-button:hover { opacity: 0.85; }
-    #submit-button:disabled { background: var(--faint); cursor: not-allowed; opacity: 1; }
-    #submit-status {
-      margin-top: 8px;
-      font-size: 12px;
-      color: var(--muted);
-      min-height: 16px;
-    }
-    #submit-status.success { color: #16a34a; }
-    #submit-status.error { color: var(--danger); }
-
-    #submit-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(24, 24, 27, 0.92);
-      color: #fff;
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 16px;
-      z-index: 1000;
-      text-align: center;
-      font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
-    }
-    #submit-overlay.visible { display: flex; }
-    #submit-overlay .checkmark {
-      width: 64px;
-      height: 64px;
-      border-radius: 50%;
-      background: #16a34a;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    #submit-overlay .checkmark svg { width: 32px; height: 32px; }
-    #submit-overlay .headline { font-size: 18px; font-weight: 700; }
-    #submit-overlay .taskid { font-size: 13px; color: #a1a1aa; font-family: monospace; }
-    #submit-overlay .sub { font-size: 13px; color: #d4d4d8; max-width: 320px; }
-
-    /* Final Win32 Paintbrush-inspired chrome overrides. */
-    html, body {
-      font-family: "MS Sans Serif", Tahoma, "Segoe UI", sans-serif;
-      -webkit-font-smoothing: none;
-      background: #c0c0c0;
-    }
-    #paint-titlebar {
-      height: 24px;
-      padding: 4px 6px;
-      border: 2px outset #dfdfdf;
-      background: #000080;
-      letter-spacing: 0;
-    }
-    #toolbar {
-      top: 26px;
-      left: 2px;
-      width: 70px;
-      display: grid;
-      grid-template-columns: repeat(2, 30px);
-      gap: 2px;
-      padding: 3px;
-      border: 2px outset #dfdfdf;
-      border-radius: 0;
-      background: #c0c0c0;
-      box-shadow: none;
-    }
-    #toolbar button {
-      width: 30px;
-      height: 30px;
-      padding: 4px;
-      border: 2px outset #dfdfdf;
-      border-radius: 0;
-      background: #c0c0c0;
-      color: #000;
-      transition: none;
-    }
-    #toolbar button:hover { background: #d4d4d4; }
-    #toolbar button.active {
-      border-style: inset;
-      background: #fff;
-      color: #000080;
-      outline: 1px dotted #000;
-      outline-offset: -4px;
-    }
-    #toolbar .divider { display: none; }
     #mask-opacity-control {
       position: absolute;
-      top: 26px;
-      left: 74px;
+      left: 8px;
+      bottom: 8px;
       z-index: 7;
-      padding: 4px;
-      border: 2px outset #dfdfdf;
-      border-radius: 0;
-      background: #c0c0c0;
-      color: #000;
-    }
-    #sidebar {
-      border-left: 2px outset #dfdfdf;
-      background: #c0c0c0;
-    }
-    #sidebar-scroll { padding: 30px 10px 10px; }
-    .language-switch,
-    #new-instruction,
-    .group-card,
-    .group-card textarea,
-    #selection-group-control,
-    #selection-group,
-    #global-note,
-    #sidebar-footer,
-    #submit-button,
-    .reference-zone {
-      border-radius: 0;
-    }
-    .language-switch,
-    .group-card,
-    #selection-group-control,
-    #global-note,
-    .reference-zone {
-      border: 2px inset #dfdfdf;
-      background: #fff;
-    }
-    #new-instruction,
-    #submit-button,
-    .language-switch button {
-      border: 2px outset #dfdfdf;
-      background: #c0c0c0;
-      color: #000;
-    }
-    #new-instruction:active,
-    #submit-button:active,
-    .language-switch button.active {
-      border-style: inset;
-      background: #fff;
-      color: #000080;
-    }
-    .group-card.active {
-      border: 2px inset #dfdfdf;
-      outline: 2px solid #000080;
-      outline-offset: -4px;
-    }
-    .group-card[aria-disabled="true"] {
-      pointer-events: none;
-      opacity: 0.65;
-    }
-    #paint-statusbar {
-      position: absolute;
-      z-index: 7;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      height: 27px;
-      display: grid;
-      grid-template-columns: minmax(150px, 1fr) auto auto;
+      display: flex;
       align-items: center;
-      gap: 4px;
-      padding: 2px 4px;
-      border: 2px outset #dfdfdf;
-      background: #c0c0c0;
-      color: #000;
+      gap: 6px;
+      padding: 5px 7px;
+      background: var(--face);
+      border: 2px outset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh), 2px 2px 0 rgba(0, 0, 0, 0.3);
+      color: var(--ink);
     }
-    #interaction-status,
-    #zoom-indicator {
-      position: static;
-      min-height: 19px;
-      padding: 2px 6px;
-      border: 2px inset #dfdfdf;
-      border-radius: 0;
-      background: #c0c0c0;
-      color: #000;
-      box-shadow: none;
-    }
-    #retro-palette {
-      display: grid;
-      grid-template-columns: repeat(8, 14px);
-      height: 18px;
-      border: 1px inset #dfdfdf;
-    }
-    #retro-palette i { display: block; border: 1px solid #202020; }
+    #mask-opacity-control[hidden] { display: none; }
+    #mask-opacity { width: 110px; }
+
     #canvas-empty-hint {
       position: absolute;
       z-index: 4;
       left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      padding: 7px 10px;
-      border: 2px outset #dfdfdf;
-      background: #ffffcc;
-      color: #000;
+      bottom: 14px;
+      transform: translateX(-50%);
+      max-width: 80%;
+      padding: 6px 12px;
+      background: #ffffe1;
+      color: var(--ink);
+      border: 1px solid var(--ink);
+      box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.35);
       pointer-events: none;
     }
+    .canvas-text-editor {
+      position: absolute;
+      z-index: 8;
+      resize: none;
+      overflow: hidden;
+      padding: 2px;
+      border: 1px dashed var(--ink);
+      background: rgba(255, 255, 255, 0.94);
+      font-family: var(--chrome-font);
+      line-height: 1.25;
+      outline: none;
+    }
+
+    /* ---------- sidebar ---------- */
+    #sidebar {
+      flex: none;
+      width: 322px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      background: var(--face);
+      border-left: 2px solid var(--hi);
+      box-shadow: -3px 0 0 -1px var(--sh);
+    }
+    #sidebar-scroll { flex: 1; overflow-y: auto; padding: 8px; }
+
+    .panel {
+      margin: 0 0 10px;
+      padding: 8px 8px 10px;
+      border: 2px groove var(--face-lt);
+      min-width: 0;
+    }
+    .panel > legend {
+      padding: 0 4px;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .win-button {
+      padding: 4px 10px;
+      background: var(--face);
+      color: var(--ink);
+      border: 2px outset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh);
+      border-radius: 0;
+      font: inherit;
+      cursor: pointer;
+    }
+    .win-button:active:not(:disabled) {
+      border-style: inset;
+      box-shadow: inset 1px 1px 0 var(--dsh), inset -1px -1px 0 var(--face-lt);
+    }
+    .win-button:disabled { color: var(--sh); text-shadow: 1px 1px 0 var(--hi); cursor: default; }
+    .win-button.default { margin: 2px; box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh), 0 0 0 2px var(--dsh); }
+
+    #new-instruction { width: 100%; font-weight: 700; }
+
+    .group-card {
+      margin-bottom: 7px;
+      background: var(--face);
+      border: 2px outset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh);
+      cursor: pointer;
+    }
+    .group-card .head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 20px;
+      padding: 0 3px;
+      background: var(--sh);
+      color: #fff;
+      font-weight: 700;
+    }
+    .group-card.active .head { background: var(--navy); }
+    .group-card.active { outline: 2px solid var(--navy); outline-offset: -2px; }
+    .group-card .dot {
+      width: 11px;
+      height: 11px;
+      flex: none;
+      border: 1px solid var(--ink);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7);
+    }
+    .group-card .number { font-size: 12px; }
+    .group-card .count { margin-left: auto; font-weight: 400; }
+    .group-card .head button {
+      width: 17px;
+      height: 15px;
+      flex: none;
+      padding: 0;
+      line-height: 11px;
+      font-size: 11px;
+      background: var(--face);
+      color: var(--ink);
+      border: 2px outset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh);
+      cursor: pointer;
+    }
+    .group-card .body { padding: 6px; }
+    .group-card textarea {
+      display: block;
+      width: 100%;
+      min-height: 44px;
+      resize: vertical;
+      padding: 3px 4px;
+      background: var(--field);
+      color: var(--ink);
+      border: 2px inset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--dsh);
+      border-radius: 0;
+      font-family: var(--chrome-font);
+      font-size: 12px;
+    }
+    textarea::placeholder { color: var(--sh); }
+    .group-card .empty-warning {
+      margin-top: 5px;
+      color: var(--danger);
+    }
+    .reference-zone {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 56px;
+      margin-top: 6px;
+      padding: 5px;
+      background: var(--field);
+      border: 2px inset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--dsh);
+      color: var(--ink-soft);
+    }
+    .reference-zone.drag-over { background: #e6e6ff; outline: 2px dotted var(--navy); outline-offset: -4px; }
+    .reference-zone .reference-empty { flex: 1; text-align: center; color: var(--sh); }
+    .reference-thumb { position: relative; width: 54px; height: 44px; flex: 0 0 auto; }
+    .reference-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; border: 1px solid var(--sh); }
+    .reference-thumb button {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      line-height: 10px;
+      background: var(--face);
+      color: var(--ink);
+      border: 2px outset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh);
+      cursor: pointer;
+    }
+    .reference-zone .reference-capacity { margin-left: auto; align-self: flex-end; color: var(--ink); }
+
+    #selection-group-control {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+      padding: 5px 6px;
+      background: var(--face);
+      border: 2px groove var(--face-lt);
+    }
+    #selection-group-control[hidden] { display: none; }
+    #selection-group {
+      margin-left: auto;
+      padding: 2px;
+      background: var(--field);
+      color: var(--ink);
+      border: 2px inset var(--face-lt);
+      border-radius: 0;
+      font: inherit;
+    }
+
+    #global-note {
+      display: block;
+      width: 100%;
+      min-height: 56px;
+      resize: vertical;
+      padding: 4px;
+      background: var(--field);
+      color: var(--ink);
+      border: 2px inset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--dsh);
+      border-radius: 0;
+      font-family: var(--chrome-font);
+      font-size: 12px;
+    }
+
+    #sidebar-footer {
+      flex: none;
+      padding: 8px;
+      box-shadow: inset 0 2px 0 -1px var(--sh), inset 0 3px 0 -1px var(--hi);
+    }
+    #submit-button { width: calc(100% - 4px); padding: 7px; font-weight: 700; }
+    #submit-status {
+      margin-top: 6px;
+      min-height: 16px;
+      color: var(--ink-soft);
+      word-break: break-word;
+    }
+    #submit-status.success { color: var(--ok); font-weight: 700; }
+    #submit-status.error { color: var(--danger); font-weight: 700; }
+
+    /* ---------- status bar ---------- */
+    #paint-statusbar {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 26px;
+      z-index: 7;
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) auto auto;
+      align-items: stretch;
+      gap: 3px;
+      padding: 2px;
+      background: var(--face);
+      box-shadow: inset 0 2px 0 -1px var(--sh), inset 0 3px 0 -1px var(--hi);
+    }
+    #interaction-status, #zoom-indicator {
+      display: flex;
+      align-items: center;
+      padding: 0 6px;
+      background: var(--face);
+      color: var(--ink);
+      border: 2px inset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--sh);
+      border-radius: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    #zoom-indicator { justify-content: center; min-width: 62px; cursor: pointer; }
+    #retro-palette {
+      display: grid;
+      grid-auto-flow: column;
+      align-items: center;
+      gap: 2px;
+      padding: 2px 4px;
+      border: 2px inset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--sh);
+    }
+    #retro-palette button {
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      border: 1px solid var(--ink);
+      cursor: pointer;
+    }
+    #retro-palette button.active { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+    /* ---------- dialogs ---------- */
+    .dialog-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.35);
+    }
+    .dialog-backdrop[hidden] { display: none; }
+    .dialog {
+      min-width: 340px;
+      max-width: 460px;
+      padding: 2px;
+      background: var(--face);
+      border: 2px outset var(--face-lt);
+      box-shadow: inset 1px 1px 0 var(--hi), inset -1px -1px 0 var(--sh), 4px 4px 0 rgba(0, 0, 0, 0.4);
+    }
+    .dialog-title {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      height: 22px;
+      padding: 2px;
+      background: var(--navy);
+      color: #fff;
+      font-weight: 700;
+    }
+    .dialog-title span { flex: 1; text-align: center; }
+    .dialog-body { padding: 12px 14px; }
+    .dialog-footer { display: flex; justify-content: center; padding: 0 12px 12px; }
+    #shortcuts-table { width: 100%; border-collapse: collapse; }
+    #shortcuts-table th {
+      padding: 8px 0 3px;
+      text-align: left;
+      font-weight: 700;
+      border-bottom: 1px solid var(--sh);
+      box-shadow: 0 1px 0 var(--hi);
+    }
+    #shortcuts-table td { padding: 2px 0; vertical-align: top; }
+    #shortcuts-table td.key {
+      width: 130px;
+      padding-right: 10px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    #submit-overlay .dialog { text-align: center; }
+    #submit-overlay .checkmark {
+      width: 44px;
+      height: 44px;
+      margin: 0 auto 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--ok);
+      border: 2px outset #7fbf7f;
+    }
+    #submit-overlay .checkmark svg { width: 26px; height: 26px; }
+    #submit-overlay .headline { font-size: 14px; font-weight: 700; margin-bottom: 8px; }
+    #submit-overlay .taskid {
+      display: block;
+      margin: 0 auto 10px;
+      padding: 4px 6px;
+      background: var(--field);
+      border: 2px inset var(--face-lt);
+      font-family: "Courier New", monospace;
+      word-break: break-all;
+    }
+    #submit-overlay .sub { color: var(--ink); }
   </style>
 </head>
 <body>
   <div id="app">
-    <div id="canvas-area">
-      <div id="paint-titlebar" aria-label="Annotation window">Screen annotation</div>
-      <img id="screenshot-source" alt="" />
-      <canvas id="annotation-canvas" class="tool-pen"></canvas>
-      <div id="canvas-empty-hint">Mark the parts of the screen you want to change.</div>
-      <div id="toolbar">
-        <button data-tool="select" title="Select / Move (V)" aria-label="Select or move marks">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="m5 3 14 8-7 2-3 7z"/></svg>
-        </button>
-        <button data-tool="pen" title="Pen (P)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-        </button>
-        <button data-tool="arrow" title="Arrow (A)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5"/><path d="M9 5h10v10"/></svg>
-        </button>
-        <button data-tool="line" title="Line (L)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 19 19 5"/></svg>
-        </button>
-        <button data-tool="rectangle" title="Rectangle (R)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/></svg>
-        </button>
-        <button data-tool="ellipse" title="Ellipse (O)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg>
-        </button>
-        <button data-tool="text" title="Text area (T)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14"/><path d="M12 6v14"/><path d="M9 20h6"/></svg>
-        </button>
-        <button data-tool="mask" title="Mask (M)">
-          <svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="5" width="16" height="14" rx="2"/></svg>
-        </button>
-        <button data-tool="erase" title="Eraser (E)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H8.5L4 15.5a1.5 1.5 0 0 1 0-2.1l9-9a1.5 1.5 0 0 1 2.1 0l4.9 4.9a1.5 1.5 0 0 1 0 2.1L13.5 18"/><path d="M14.5 6.5 18 10"/></svg>
-        </button>
-        <div class="divider"></div>
-        <button id="undo-button" title="Undo (Ctrl+Z)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h11a5 5 0 0 1 0 10H8"/><path d="M8 5 3 10l5 5"/></svg>
-        </button>
-        <button id="redo-button" title="Redo (Ctrl+Shift+Z)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10H10a5 5 0 0 0 0 10h7"/><path d="M16 5l5 5-5 5"/></svg>
-        </button>
-      </div>
-      <label id="mask-opacity-control" hidden><span id="mask-opacity-label">Mask opacity</span> <input id="mask-opacity" type="range" min="0.1" max="1" step="0.1" value="0.5" /></label>
-      <div id="paint-statusbar">
-        <span id="interaction-status" role="status" aria-live="polite">Select / Move · Group #1</span>
-        <span id="retro-palette" aria-hidden="true">
-          <i style="background:#000"></i><i style="background:#fff"></i><i style="background:#dc2626"></i><i style="background:#facc15"></i>
-          <i style="background:#16a34a"></i><i style="background:#2563eb"></i><i style="background:#9333ea"></i><i style="background:#06b6d4"></i>
-        </span>
-        <span id="zoom-indicator">100%</span>
-      </div>
+    <div id="paint-titlebar">
+      <span class="titlebar-box" id="titlebar-sysmenu" aria-hidden="true"></span>
+      <span id="paint-titlebar-text">Redpen - Screen annotation</span>
+      <span id="titlebar-boxes" aria-hidden="true">
+        <span class="titlebar-box">▼</span><span class="titlebar-box">▲</span>
+      </span>
     </div>
-    <div id="sidebar">
-      <div id="sidebar-scroll">
-        <div class="language-switch" aria-label="Language">
-          <button type="button" data-locale="en" class="active">English</button>
-          <button type="button" data-locale="ko">한국어</button>
-        </div>
-        <div class="section-label" id="groups-label">Instruction groups</div>
-        <button id="new-instruction">+ New instruction</button>
-        <div id="group-cards"></div>
-        <label id="selection-group-control"><span id="selection-group-control-text">Move selected marks to</span> <select id="selection-group" aria-label="Move selected marks to group"></select></label>
 
-        <div class="section-label" id="global-note-label">Global note (optional)</div>
-        <textarea id="global-note" placeholder="Describe the overall change..."></textarea>
+    <div id="menubar" role="menubar">
+      <div class="menu-title" role="menuitem" tabindex="0" data-menu="file" aria-expanded="false">File</div>
+      <div class="menu-title" role="menuitem" tabindex="0" data-menu="edit" aria-expanded="false">Edit</div>
+      <div class="menu-title" role="menuitem" tabindex="0" data-menu="view" aria-expanded="false">View</div>
+      <div class="menu-title" role="menuitem" tabindex="0" data-menu="help" aria-expanded="false">Help</div>
+      <span class="menu-spacer"></span>
+      <button type="button" class="menu-lang active" data-locale="en">English</button>
+      <button type="button" class="menu-lang" data-locale="ko">한국어</button>
+    </div>
+
+    <div id="workspace">
+      <div id="toolbox">
+        <div id="toolbar">
+          <button data-tool="select" title="Select / Move (V)" aria-label="Select or move marks">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="m5 3 14 8-7 2-3 7z"/></svg>
+          </button>
+          <button data-tool="pen" title="Pen (P)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          </button>
+          <button data-tool="arrow" title="Arrow (A)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5"/><path d="M9 5h10v10"/></svg>
+          </button>
+          <button data-tool="line" title="Line (L)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 19 19 5"/></svg>
+          </button>
+          <button data-tool="rectangle" title="Rectangle (R)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14"/></svg>
+          </button>
+          <button data-tool="ellipse" title="Ellipse (O)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg>
+          </button>
+          <button data-tool="text" title="Text area (T)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14"/><path d="M12 6v14"/><path d="M9 20h6"/></svg>
+          </button>
+          <button data-tool="mask" title="Mask (M)">
+            <svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="5" width="16" height="14"/></svg>
+          </button>
+          <button data-tool="erase" title="Eraser (E)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H8.5L4 15.5a1.5 1.5 0 0 1 0-2.1l9-9a1.5 1.5 0 0 1 2.1 0l4.9 4.9a1.5 1.5 0 0 1 0 2.1L13.5 18"/><path d="M14.5 6.5 18 10"/></svg>
+          </button>
+          <div class="divider"></div>
+          <button id="undo-button" title="Undo (Ctrl+Z)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h11a5 5 0 0 1 0 10H8"/><path d="M8 5 3 10l5 5"/></svg>
+          </button>
+          <button id="redo-button" title="Redo (Ctrl+Shift+Z)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10H10a5 5 0 0 0 0 10h7"/><path d="M16 5l5 5-5 5"/></svg>
+          </button>
+        </div>
+        <div id="toolbox-hint">Select / Move</div>
       </div>
-      <div id="sidebar-footer">
-        <button id="submit-button">Submit instructions</button>
-        <div id="submit-status"></div>
+
+      <div id="canvas-area">
+        <img id="screenshot-source" alt="" />
+        <canvas id="annotation-canvas" class="tool-select"></canvas>
+        <div id="canvas-empty-hint">Mark the parts of the screen you want to change.</div>
+        <label id="mask-opacity-control" hidden><span id="mask-opacity-label">Mask opacity</span> <input id="mask-opacity" type="range" min="0.1" max="1" step="0.1" value="0.5" /></label>
+      </div>
+
+      <div id="sidebar">
+        <div id="sidebar-scroll">
+          <fieldset class="panel">
+            <legend class="section-label" id="groups-label">Instruction groups</legend>
+            <button id="new-instruction" class="win-button">+ New instruction</button>
+            <div id="group-cards"></div>
+            <label id="selection-group-control" hidden><span id="selection-group-control-text">Move selected marks to</span> <select id="selection-group" aria-label="Move selected marks to group"></select></label>
+          </fieldset>
+          <fieldset class="panel">
+            <legend class="section-label" id="global-note-label">Global note (optional)</legend>
+            <textarea id="global-note" placeholder="Describe the overall change..."></textarea>
+          </fieldset>
+        </div>
+        <div id="sidebar-footer">
+          <button id="submit-button" class="win-button default">Submit instructions</button>
+          <div id="submit-status"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="paint-statusbar">
+      <span id="interaction-status" role="status" aria-live="polite">Select / Move · Group #1</span>
+      <span id="retro-palette"></span>
+      <span id="zoom-indicator" role="button" tabindex="0" title="Fit to window">100%</span>
+    </div>
+  </div>
+
+  <div id="shortcuts-dialog" class="dialog-backdrop" hidden>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
+      <div class="dialog-title">
+        <span id="shortcuts-title">Keyboard shortcuts</span>
+        <button type="button" class="titlebar-box" id="shortcuts-close" aria-label="Close">×</button>
+      </div>
+      <div class="dialog-body"><table id="shortcuts-table"></table></div>
+      <div class="dialog-footer"><button type="button" class="win-button default" id="shortcuts-ok">OK</button></div>
+    </div>
+  </div>
+
+  <div id="submit-overlay" class="dialog-backdrop" hidden>
+    <div class="dialog" role="dialog" aria-modal="true">
+      <div class="dialog-title"><span id="submit-overlay-title">Redpen</span></div>
+      <div class="dialog-body">
+        <div class="checkmark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        </div>
+        <div class="headline" id="submit-overlay-headline">Submitted</div>
+        <code class="taskid" id="submit-overlay-taskid"></code>
+        <div class="sub" id="submit-overlay-sub">The agent is reviewing your instructions. This tab will close shortly.</div>
       </div>
     </div>
   </div>
-  <div id="submit-overlay">
-    <div class="checkmark">
-      <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-    </div>
-    <div class="headline" id="submit-overlay-headline">Submitted</div>
-    <div class="taskid" id="submit-overlay-taskid"></div>
-    <div class="sub" id="submit-overlay-sub">The agent is reviewing your instructions. This tab will close shortly.</div>
-  </div>
+
   <script src="/session.bundle.js"></script>
   <script>
     // Reads sessionId + token from the URL the daemon opened this tab with
@@ -589,14 +772,56 @@
         attachedLimit: 'Only the first three images were attached.',
         emptyWarning: 'Draw at least one mark for this group',
         canvasHint: 'Mark the parts of the screen you want to change.',
+        fitToWindow: 'Fit to window',
+        groupSwatch: (number) => `Group #${number}`,
         tools: {
           select: 'Select / Move (V) — Shift-click to add, Delete to remove, Esc to clear',
           pen: 'Pen (P)', arrow: 'Arrow (A)', line: 'Line (L)', rectangle: 'Rectangle (R)',
           ellipse: 'Ellipse (O)', text: 'Text area (T)', mask: 'Mask (M)',
           erase: 'Eraser (E)',
         },
+        toolNames: {
+          select: 'Select / Move', pen: 'Pen', arrow: 'Arrow', line: 'Line', rectangle: 'Rectangle',
+          ellipse: 'Ellipse', text: 'Text area', mask: 'Mask', erase: 'Eraser',
+        },
         undo: 'Undo (Ctrl+Z)',
         redo: 'Redo (Ctrl+Shift+Z)',
+        menus: {
+          file: 'File', edit: 'Edit', view: 'View', help: 'Help',
+          newInstruction: 'New instruction', submit: 'Submit instructions',
+          undo: 'Undo', redo: 'Redo', deleteSelection: 'Delete selection',
+          zoomIn: 'Zoom in', zoomOut: 'Zoom out', fit: 'Fit to window',
+          shortcuts: 'Keyboard shortcuts...',
+        },
+        shortcutsTitle: 'Keyboard shortcuts',
+        shortcutSections: [
+          ['Tools', [
+            ['V', 'Select / Move'], ['P', 'Pen'], ['A', 'Arrow'], ['L', 'Line'],
+            ['R', 'Rectangle'], ['O', 'Ellipse'], ['T', 'Text area'], ['M', 'Mask'], ['E', 'Eraser'],
+          ]],
+          ['Drawing', [
+            ['Shift + drag', 'Constrain to square / circle / 45°'],
+            ['Drag on empty area', 'Marquee select, then drag it to copy that patch elsewhere'],
+            ['Double-click / Enter', 'Edit an existing text mark'],
+            ['Ctrl + Enter', 'Commit the text you are typing'],
+            ['Delete', 'Remove the selected marks'],
+            ['Esc', 'Clear the selection / cancel drawing'],
+          ]],
+          ['Groups', [
+            ['1 - 9', 'Switch active instruction group'],
+            ['N', 'New instruction group'],
+          ]],
+          ['View', [
+            ['Mouse wheel', 'Zoom around the pointer'],
+            ['+ / -', 'Zoom in / out'],
+            ['0', 'Fit to window'],
+            ['Space + drag', 'Pan'],
+          ]],
+          ['Edit', [
+            ['Ctrl + Z', 'Undo'], ['Ctrl + Shift + Z', 'Redo'],
+          ]],
+        ],
+        ok: 'OK',
       },
       ko: {
         title: 'Redpen — 화면에 지시 그리기',
@@ -624,48 +849,216 @@
         attachedLimit: '최대 3장까지만 첨부했습니다.',
         emptyWarning: '아직 아무것도 그리지 않았어요',
         canvasHint: '화면에서 수정할 부분을 표시하세요.',
+        fitToWindow: '창에 맞추기',
+        groupSwatch: (number) => `그룹 #${number}`,
         tools: {
           select: '선택 / 이동 (V) — Shift+클릭 추가, Delete 삭제, Esc 해제',
           pen: '펜 (P)', arrow: '화살표 (A)', line: '직선 (L)', rectangle: '사각형 (R)',
           ellipse: '원 (O)', text: '텍스트 영역 (T)', mask: '가리기 (M)',
           erase: '지우개 (E)',
         },
+        toolNames: {
+          select: '선택 / 이동', pen: '펜', arrow: '화살표', line: '직선', rectangle: '사각형',
+          ellipse: '원', text: '텍스트 영역', mask: '가리기', erase: '지우개',
+        },
         undo: '되돌리기 (Ctrl+Z)',
         redo: '다시 실행 (Ctrl+Shift+Z)',
+        menus: {
+          file: '파일', edit: '편집', view: '보기', help: '도움말',
+          newInstruction: '새 지시', submit: '지시 제출',
+          undo: '되돌리기', redo: '다시 실행', deleteSelection: '선택 삭제',
+          zoomIn: '확대', zoomOut: '축소', fit: '창에 맞추기',
+          shortcuts: '단축키...',
+        },
+        shortcutsTitle: '단축키',
+        shortcutSections: [
+          ['도구', [
+            ['V', '선택 / 이동'], ['P', '펜'], ['A', '화살표'], ['L', '직선'],
+            ['R', '사각형'], ['O', '원'], ['T', '텍스트 영역'], ['M', '가리기'], ['E', '지우개'],
+          ]],
+          ['그리기', [
+            ['Shift + 드래그', '정사각형 / 정원 / 45° 고정'],
+            ['빈 곳 드래그', '영역 선택 후 드래그하면 그 부분을 다른 위치로 복사'],
+            ['더블클릭 / Enter', '기존 텍스트 수정'],
+            ['Ctrl + Enter', '입력 중인 텍스트 확정'],
+            ['Delete', '선택한 표시 삭제'],
+            ['Esc', '선택 해제 / 그리기 취소'],
+          ]],
+          ['그룹', [
+            ['1 - 9', '활성 지시 그룹 전환'],
+            ['N', '새 지시 그룹'],
+          ]],
+          ['보기', [
+            ['마우스 휠', '포인터 기준 확대/축소'],
+            ['+ / -', '확대 / 축소'],
+            ['0', '창에 맞추기'],
+            ['Space + 드래그', '화면 이동'],
+          ]],
+          ['편집', [
+            ['Ctrl + Z', '되돌리기'], ['Ctrl + Shift + Z', '다시 실행'],
+          ]],
+        ],
+        ok: '확인',
       },
     };
     let locale = localStorage.getItem('redpen-locale') === 'ko' ? 'ko' : 'en';
     const tr = (key) => COPY[locale][key];
+    const el = (id) => document.getElementById(id);
 
-    const canvas = document.getElementById('annotation-canvas');
-    const img = document.getElementById('screenshot-source');
+    const canvas = el('annotation-canvas');
+    const img = el('screenshot-source');
     img.src = `/api/sessions/${sessionId}/annotator/screenshot?token=${encodeURIComponent(token)}`;
 
     let app;
+    let currentTool = 'select';
     let lastRenderedActiveGroupId = null;
+    let lastRenderedGlobalNote = null;
+
+    // ---------- menu bar ----------
+    // The menu is the discoverability surface: every shortcut the canvas
+    // supports is reachable (and labelled) here, so nothing is hidden behind
+    // a keypress the user has to already know about.
+    const MENUS = {
+      file: () => [
+        { label: tr('menus').newInstruction, accel: 'N', enabled: !el('new-instruction').disabled, run: () => el('new-instruction').click() },
+        { separator: true },
+        { label: tr('menus').submit, accel: 'Ctrl+Enter', enabled: !el('submit-button').disabled, run: () => el('submit-button').click() },
+      ],
+      edit: () => [
+        { label: tr('menus').undo, accel: 'Ctrl+Z', enabled: !el('undo-button').disabled, run: () => app.undo() },
+        { label: tr('menus').redo, accel: 'Ctrl+Shift+Z', enabled: !el('redo-button').disabled, run: () => app.redo() },
+        { separator: true },
+        { label: tr('menus').deleteSelection, accel: 'Del', enabled: Boolean(app?.hasSelection?.()), run: () => app.deleteSelection() },
+      ],
+      view: () => [
+        { label: tr('menus').zoomIn, accel: '+', enabled: true, run: () => app.zoomBy(1.25) },
+        { label: tr('menus').zoomOut, accel: '-', enabled: true, run: () => app.zoomBy(0.8) },
+        { separator: true },
+        { label: tr('menus').fit, accel: '0', enabled: true, run: () => app.fitToView() },
+      ],
+      help: () => [
+        { label: tr('menus').shortcuts, accel: 'F1', enabled: true, run: () => openShortcuts() },
+      ],
+    };
+
+    function closeMenus() {
+      for (const title of document.querySelectorAll('.menu-title')) {
+        title.setAttribute('aria-expanded', 'false');
+        title.querySelector('.menu-popup')?.remove();
+      }
+    }
+
+    function openMenu(title) {
+      const wasOpen = title.getAttribute('aria-expanded') === 'true';
+      closeMenus();
+      if (wasOpen) return;
+      const popup = document.createElement('div');
+      popup.className = 'menu-popup';
+      for (const item of MENUS[title.dataset.menu]()) {
+        if (item.separator) {
+          const separator = document.createElement('div');
+          separator.className = 'menu-sep';
+          popup.appendChild(separator);
+          continue;
+        }
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'menu-item' + (item.checked ? ' checked' : '');
+        button.disabled = !item.enabled;
+        const label = document.createElement('span');
+        label.textContent = item.label;
+        button.appendChild(label);
+        if (item.accel) {
+          const accel = document.createElement('span');
+          accel.className = 'accel';
+          accel.textContent = item.accel;
+          button.appendChild(accel);
+        }
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          closeMenus();
+          item.run();
+        });
+        popup.appendChild(button);
+      }
+      title.appendChild(popup);
+      title.setAttribute('aria-expanded', 'true');
+    }
+
+    for (const title of document.querySelectorAll('.menu-title')) {
+      title.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openMenu(title);
+      });
+      title.addEventListener('pointerenter', () => {
+        if (document.querySelector('.menu-title[aria-expanded="true"]')) openMenu(title);
+      });
+    }
+    document.addEventListener('click', closeMenus);
+
+    // ---------- shortcut dialog ----------
+    function openShortcuts() {
+      const table = el('shortcuts-table');
+      table.innerHTML = '';
+      for (const [section, rows] of tr('shortcutSections')) {
+        const head = document.createElement('tr');
+        const heading = document.createElement('th');
+        heading.colSpan = 2;
+        heading.textContent = section;
+        head.appendChild(heading);
+        table.appendChild(head);
+        for (const [key, description] of rows) {
+          const row = document.createElement('tr');
+          const keyCell = document.createElement('td');
+          keyCell.className = 'key';
+          keyCell.textContent = key;
+          const descriptionCell = document.createElement('td');
+          descriptionCell.textContent = description;
+          row.append(keyCell, descriptionCell);
+          table.appendChild(row);
+        }
+      }
+      el('shortcuts-dialog').hidden = false;
+      el('shortcuts-ok').focus();
+    }
+    const closeShortcuts = () => { el('shortcuts-dialog').hidden = true; };
+    el('shortcuts-ok').addEventListener('click', closeShortcuts);
+    el('shortcuts-close').addEventListener('click', closeShortcuts);
+    el('shortcuts-dialog').addEventListener('click', (event) => {
+      if (event.target === el('shortcuts-dialog')) closeShortcuts();
+    });
 
     function applyLocale() {
+      closeMenus();
       document.documentElement.lang = locale;
       document.title = tr('title');
-      document.getElementById('paint-titlebar').textContent = tr('windowTitle');
-      document.getElementById('groups-label').textContent = tr('groups');
-      document.getElementById('new-instruction').textContent = tr('newInstruction');
-      document.getElementById('global-note-label').textContent = tr('globalNote');
-      document.getElementById('global-note').placeholder = tr('globalPlaceholder');
-      document.getElementById('submit-button').textContent = tr('submit');
-      document.getElementById('submit-overlay-headline').textContent = tr('submitted');
-      document.getElementById('submit-overlay-sub').textContent = tr('submittedSub');
-      document.getElementById('selection-group-control-text').textContent = tr('moveSelection');
-      document.getElementById('canvas-empty-hint').textContent = tr('canvasHint');
-      document.getElementById('mask-opacity-label').textContent = tr('maskOpacity');
-      document.getElementById('undo-button').title = tr('undo');
-      document.getElementById('redo-button').title = tr('redo');
+      el('paint-titlebar-text').textContent = tr('windowTitle');
+      el('groups-label').textContent = tr('groups');
+      el('new-instruction').textContent = tr('newInstruction');
+      el('global-note-label').textContent = tr('globalNote');
+      el('global-note').placeholder = tr('globalPlaceholder');
+      el('submit-button').textContent = tr('submit');
+      el('submit-overlay-headline').textContent = tr('submitted');
+      el('submit-overlay-sub').textContent = tr('submittedSub');
+      el('selection-group-control-text').textContent = tr('moveSelection');
+      el('canvas-empty-hint').textContent = tr('canvasHint');
+      el('mask-opacity-label').textContent = tr('maskOpacity');
+      el('undo-button').title = tr('undo');
+      el('redo-button').title = tr('redo');
+      el('zoom-indicator').title = tr('fitToWindow');
+      el('shortcuts-title').textContent = tr('shortcutsTitle');
+      el('shortcuts-ok').textContent = tr('ok');
+      el('toolbox-hint').textContent = tr('toolNames')[currentTool];
+      for (const title of document.querySelectorAll('.menu-title')) {
+        title.textContent = tr('menus')[title.dataset.menu];
+      }
       for (const button of document.querySelectorAll('[data-locale]')) {
         button.classList.toggle('active', button.dataset.locale === locale);
       }
       for (const button of document.querySelectorAll('#toolbar [data-tool]')) {
         button.title = COPY[locale].tools[button.dataset.tool];
       }
+      if (!el('shortcuts-dialog').hidden) openShortcuts();
       app?.setLocale(locale);
       if (app?.state) renderSidebar();
     }
@@ -673,7 +1066,7 @@
     const TOOL_KEYS = { v: 'select', p: 'pen', a: 'arrow', l: 'line', r: 'rectangle', o: 'ellipse', t: 'text', m: 'mask', e: 'erase' };
 
     function resizeCanvas() {
-      const area = document.getElementById('canvas-area');
+      const area = el('canvas-area');
       canvas.width = area.clientWidth;
       canvas.height = area.clientHeight;
       if (app) app.render();
@@ -681,15 +1074,20 @@
 
     function selectTool(tool) {
       app.setTool(tool);
+      // setTool() refuses while a save is in flight; don't paint a tool as
+      // active when the canvas is still on the previous one.
+      if (app.tool !== tool) return;
+      currentTool = tool;
       canvas.className = `tool-${tool}`;
       for (const b of document.querySelectorAll('#toolbar button[data-tool]')) {
         b.classList.toggle('active', b.dataset.tool === tool);
       }
-      document.getElementById('mask-opacity-control').hidden = tool !== 'mask';
+      el('toolbox-hint').textContent = tr('toolNames')[tool];
+      el('mask-opacity-control').hidden = tool !== 'mask';
     }
 
     function updateZoomIndicator() {
-      document.getElementById('zoom-indicator').textContent = `${Math.round(app.scale * 100)}%`;
+      el('zoom-indicator').textContent = `${Math.round(app.scale * 100)}%`;
     }
 
     async function boot() {
@@ -705,12 +1103,13 @@
       renderSidebar();
       updateZoomIndicator();
 
-      document.getElementById('new-instruction').addEventListener('click', async () => {
+      el('new-instruction').addEventListener('click', async () => {
         await app.createGroup();
         renderSidebar();
       });
-      document.getElementById('undo-button').addEventListener('click', () => app.undo());
-      document.getElementById('redo-button').addEventListener('click', () => app.redo());
+      el('undo-button').addEventListener('click', () => app.undo());
+      el('redo-button').addEventListener('click', () => app.redo());
+      el('zoom-indicator').addEventListener('click', () => app.fitToView());
       for (const button of document.querySelectorAll('[data-locale]')) {
         button.addEventListener('click', () => {
           locale = button.dataset.locale;
@@ -718,11 +1117,11 @@
           applyLocale();
         });
       }
-      document.getElementById('submit-button').addEventListener('click', async () => {
-        const status = document.getElementById('submit-status');
+      el('submit-button').addEventListener('click', async () => {
+        const status = el('submit-status');
         status.className = '';
         try {
-          const globalNoteValue = document.getElementById('global-note').value;
+          const globalNoteValue = el('global-note').value;
           await app.setGlobalNote(globalNoteValue);
           const result = await app.submit();
           status.textContent = result.cleanupWarnings?.length
@@ -739,17 +1138,31 @@
       for (const button of document.querySelectorAll('#toolbar button[data-tool]')) {
         button.addEventListener('click', () => selectTool(button.dataset.tool));
       }
-      document.getElementById('mask-opacity').addEventListener('input', (event) => app.previewMaskOpacity(Number(event.target.value)));
-      document.getElementById('mask-opacity').addEventListener('change', () => {
+      el('mask-opacity').addEventListener('input', (event) => app.previewMaskOpacity(Number(event.target.value)));
+      el('mask-opacity').addEventListener('change', () => {
         void app.commitMaskOpacity();
       });
       selectTool('select');
 
       document.addEventListener('keydown', (event) => {
-        if (event.ctrlKey || event.metaKey) return; // undo/redo shortcuts are handled inside SessionAnnotatorApp
+        if (event.key === 'Escape') {
+          closeMenus();
+          closeShortcuts();
+        }
+        if (event.key === 'F1') { event.preventDefault(); openShortcuts(); return; }
         if (document.activeElement && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName)) return;
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+          event.preventDefault();
+          if (!el('submit-button').disabled) el('submit-button').click();
+          return;
+        }
+        if (event.ctrlKey || event.metaKey) return; // undo/redo are handled inside SessionAnnotatorApp
         const tool = TOOL_KEYS[event.key.toLowerCase()];
-        if (tool) selectTool(tool);
+        if (tool) { selectTool(tool); return; }
+        if (event.key.toLowerCase() === 'n') { if (!el('new-instruction').disabled) el('new-instruction').click(); return; }
+        if (event.key === '+' || event.key === '=') { app.zoomBy(1.25); return; }
+        if (event.key === '-' || event.key === '_') { app.zoomBy(0.8); return; }
+        if (event.key === '0') { app.fitToView(); return; }
       });
 
       window.__redpenSessionApp = app;
@@ -757,15 +1170,56 @@
       applyLocale();
     }
 
+    function renderPalette(state) {
+      const palette = el('retro-palette');
+      palette.innerHTML = '';
+      for (const group of state.groups) {
+        const swatch = document.createElement('button');
+        swatch.type = 'button';
+        swatch.style.background = group.color;
+        swatch.title = tr('groupSwatch')(group.number);
+        swatch.className = group.id === state.activeGroupId ? 'active' : '';
+        swatch.addEventListener('click', async () => {
+          await app.focusGroup(group.id);
+          renderSidebar();
+        });
+        swatch.addEventListener('pointerenter', () => app.setHoveredGroup(group.id));
+        swatch.addEventListener('pointerleave', () => app.setHoveredGroup(null));
+        palette.appendChild(swatch);
+      }
+    }
+
+    // renderSidebar() rebuilds every card from scratch, which used to throw
+    // away the caret (and any not-yet-saved keystrokes) of whatever note the
+    // user was typing whenever an unrelated round-trip finished.
+    function captureNoteFocus() {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLTextAreaElement)) return null;
+      const card = active.closest('.group-card');
+      if (!card) return null;
+      return { groupId: card.dataset.groupId, value: active.value, start: active.selectionStart, end: active.selectionEnd };
+    }
+
+    function restoreNoteFocus(snapshot) {
+      if (!snapshot) return;
+      const textarea = document.querySelector(`.group-card[data-group-id="${CSS.escape(snapshot.groupId)}"] textarea`);
+      if (!textarea) return;
+      textarea.value = snapshot.value;
+      textarea.focus();
+      textarea.setSelectionRange(snapshot.start, snapshot.end);
+    }
+
     function renderSidebar() {
       const state = app.state;
       const mutationPending = app.isMutationInFlight();
-      document.getElementById('canvas-empty-hint').hidden = state.marks.length > 0;
+      const noteFocus = captureNoteFocus();
+      el('canvas-empty-hint').hidden = state.marks.length > 0;
       for (const button of document.querySelectorAll('#toolbar button[data-tool]')) button.disabled = mutationPending;
-      document.getElementById('mask-opacity').disabled = mutationPending;
-      document.getElementById('new-instruction').disabled = mutationPending;
-      document.getElementById('global-note').disabled = mutationPending;
-      const selectionGroup = document.getElementById('selection-group');
+      el('mask-opacity').disabled = mutationPending;
+      el('new-instruction').disabled = mutationPending;
+      el('global-note').disabled = mutationPending;
+      renderPalette(state);
+      const selectionGroup = el('selection-group');
       selectionGroup.innerHTML = '';
       for (const group of state.groups) {
         const option = document.createElement('option');
@@ -774,9 +1228,11 @@
         option.selected = group.id === state.activeGroupId;
         selectionGroup.appendChild(option);
       }
-      selectionGroup.disabled = mutationPending || !app.selectedMarkIds?.size;
+      const hasSelection = Boolean(app.selectedMarkIds?.size);
+      el('selection-group-control').hidden = !hasSelection;
+      selectionGroup.disabled = mutationPending || !hasSelection;
       selectionGroup.onchange = () => app.reassignSelection(selectionGroup.value);
-      const container = document.getElementById('group-cards');
+      const container = el('group-cards');
       container.innerHTML = '';
       for (const group of state.groups) {
         const card = document.createElement('div');
@@ -804,19 +1260,33 @@
 
         card.appendChild(head);
 
+        const body = document.createElement('div');
+        body.className = 'body';
+        card.appendChild(body);
+
         const textarea = document.createElement('textarea');
         textarea.placeholder = tr('groupPlaceholder');
         textarea.value = group.note ?? '';
         textarea.disabled = mutationPending;
-        textarea.addEventListener('click', (e) => e.stopPropagation());
+        // Typing a note targets its group without yanking the canvas around
+        // the way a full focusGroup() pan would mid-sentence.
+        textarea.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (group.id !== state.activeGroupId) void app.setActiveGroup(group.id);
+        });
         textarea.addEventListener('change', async () => {
           await app.setGroupNote(group.id, textarea.value);
         });
-        card.appendChild(textarea);
+        body.appendChild(textarea);
 
         const referenceZone = document.createElement('div');
         referenceZone.className = 'reference-zone';
-        referenceZone.addEventListener('click', (event) => event.stopPropagation());
+        // Ctrl+V attaches to the *active* group, so clicking a zone has to
+        // make its group active or the paste lands on the wrong card.
+        referenceZone.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (group.id !== state.activeGroupId) void app.setActiveGroup(group.id);
+        });
         const referenceIds = group.referenceIds;
         if (referenceIds.length === 0) {
           const empty = document.createElement('span');
@@ -852,7 +1322,7 @@
         capacity.className = 'reference-capacity';
         capacity.textContent = `${referenceIds.length}/3`;
         referenceZone.appendChild(capacity);
-        card.appendChild(referenceZone);
+        body.appendChild(referenceZone);
 
         const attachDroppedImage = async (event) => {
           event.preventDefault();
@@ -862,8 +1332,8 @@
           if (files.length === 0) return;
           const availableSlots = 3 - referenceIds.length;
           if (availableSlots <= 0) {
-            document.getElementById('submit-status').textContent = tr('referenceLimit');
-            document.getElementById('submit-status').className = 'error';
+            el('submit-status').textContent = tr('referenceLimit');
+            el('submit-status').className = 'error';
             return;
           }
           let failedUploads = 0;
@@ -875,11 +1345,11 @@
             }
           }
           if (files.length > availableSlots || failedUploads > 0) {
-            document.getElementById('submit-status').textContent =
+            el('submit-status').textContent =
               failedUploads > 0
                 ? tr('uploadFailed')(failedUploads)
                 : tr('attachedLimit');
-            document.getElementById('submit-status').className = 'error';
+            el('submit-status').className = 'error';
           }
         };
         card.addEventListener('dragover', (event) => {
@@ -898,7 +1368,7 @@
           const warning = document.createElement('div');
           warning.className = 'empty-warning';
           warning.textContent = tr('emptyWarning');
-          card.appendChild(warning);
+          body.appendChild(warning);
           if (state.groups.length > 1 && group.referenceIds.length === 0) {
             const removeGroup = document.createElement('button');
             removeGroup.type = 'button';
@@ -926,25 +1396,32 @@
         });
       }
 
-      document.getElementById('global-note').value = state.globalNote ?? '';
-      document.getElementById('undo-button').disabled = mutationPending || !state.canUndo;
-      document.getElementById('redo-button').disabled = mutationPending || !state.canRedo;
-      document.getElementById('submit-button').disabled = mutationPending || !state.canSubmit;
+      // Only push the server value into the textarea when the server value
+      // actually changed (undo, reload, another writer). Rewriting it on every
+      // render threw away whatever the user had typed but not yet blurred.
+      const serverGlobalNote = state.globalNote ?? '';
+      if (serverGlobalNote !== lastRenderedGlobalNote) {
+        el('global-note').value = serverGlobalNote;
+        lastRenderedGlobalNote = serverGlobalNote;
+      }
+      restoreNoteFocus(noteFocus);
+      el('undo-button').disabled = mutationPending || !state.canUndo;
+      el('redo-button').disabled = mutationPending || !state.canRedo;
+      el('submit-button').disabled = mutationPending || !state.canSubmit;
     }
 
     window.addEventListener('resize', resizeCanvas);
 
     // Submitting used to leave the annotation tab sitting open with only a
-    // small sidebar-footer line of text as feedback \u2014 easy to miss, and the
+    // small sidebar-footer line of text as feedback — easy to miss, and the
     // tab itself never told the user (or the agent watching the target
     // page) that the task was actually done. This makes success loud
-    // \u2014 full-screen confirmation with the real task id \u2014 and then closes
+    // — a modal confirmation with the real task id — and then closes
     // the tab automatically so the user lands back on the page they were
     // annotating instead of a dead annotation UI.
     function showSubmitOverlayAndClose(taskId) {
-      const overlay = document.getElementById('submit-overlay');
-      document.getElementById('submit-overlay-taskid').textContent = taskId;
-      overlay.classList.add('visible');
+      el('submit-overlay-taskid').textContent = taskId;
+      el('submit-overlay').hidden = false;
       setTimeout(() => {
         window.close();
         // window.close() is a no-op for tabs not opened by script in some
