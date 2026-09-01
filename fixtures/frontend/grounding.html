@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>Redpen grounding fixture</title>
+  <style>
+    html, body { margin: 0; padding: 0; font-family: system-ui, sans-serif; background: #fff; }
+    #flex-row {
+      display: flex;
+      gap: 8px;
+      padding: 16px;
+    }
+    #flex-row .chip {
+      background: #eee;
+      border-radius: 4px;
+      padding: 4px 8px;
+    }
+    #grid-area {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 4px;
+      padding: 16px;
+      position: relative;
+      top: 100px;
+    }
+    #grid-area .cell {
+      background: #f5f5f5;
+      height: 40px;
+    }
+    #absolute-card {
+      position: absolute;
+      top: 300px;
+      left: 40px;
+      width: 220px;
+      height: 100px;
+      background: #fafafa;
+      border: 1px solid #ccc;
+    }
+    #nested-wrapper {
+      position: absolute;
+      top: 450px;
+      left: 40px;
+      padding: 20px;
+      background: #eef;
+    }
+    #nested-wrapper button {
+      padding: 8px 16px;
+    }
+    #icon-button {
+      position: absolute;
+      top: 600px;
+      left: 40px;
+      width: 32px;
+      height: 32px;
+      background: #333;
+      border: none;
+      border-radius: 50%;
+    }
+    #tall-spacer {
+      height: 2000px;
+    }
+    #scrolled-target {
+      position: absolute;
+      top: 2100px;
+      left: 100px;
+      width: 150px;
+      height: 60px;
+      background: #cfc;
+    }
+    #password-field {
+      position: absolute;
+      top: 750px;
+      left: 40px;
+    }
+    #blank-area {
+      position: absolute;
+      top: 850px;
+      left: 40px;
+      width: 400px;
+      height: 200px;
+      background: transparent;
+    }
+  </style>
+</head>
+<body>
+  <div id="flex-row" data-testid="flex-row">
+    <div class="chip" data-testid="chip-a">A</div>
+    <div class="chip" data-testid="chip-b">B</div>
+    <div class="chip" data-testid="chip-c">C</div>
+  </div>
+  <div id="grid-area" data-testid="grid-area">
+    <div class="cell" data-testid="cell-1"></div>
+    <div class="cell" data-testid="cell-2"></div>
+    <div class="cell" data-testid="cell-3"></div>
+  </div>
+  <div id="absolute-card" data-testid="absolute-card" role="region" aria-label="absolute card"></div>
+  <div id="nested-wrapper" data-testid="nested-wrapper">
+    <button data-testid="nested-button">Nested action</button>
+  </div>
+  <button id="icon-button" data-testid="icon-button" aria-label="settings"></button>
+  <div id="tall-spacer"></div>
+  <div id="scrolled-target" data-testid="scrolled-target"></div>
+  <input id="password-field" type="password" data-testid="password-field" value="do-not-collect-me" />
+  <div id="blank-area" data-testid="blank-area"></div>
+</body>
+</html>

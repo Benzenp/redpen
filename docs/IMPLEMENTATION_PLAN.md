@@ -207,20 +207,20 @@ UI보다 먼저 안정적인 task/session schema와 상태 전이를 만든다.
 
 ### 작업
 
-- [ ] visible DOM candidate collector
-- [ ] 민감 attribute/value redaction
-- [ ] role/accessibility name/text summary 추출
-- [ ] selector hint 생성: test ID → stable ID → role/name → structural hint 순서
-- [ ] rect intersection 및 containment scoring
-- [ ] freehand path proximity scoring
-- [ ] arrow source/destination grounding
-- [ ] nearest container fallback
-- [ ] parent/sibling summary
-- [ ] computed layout allowlist
-- [ ] group별 target ranking과 중복 제거
-- [ ] temporary full index 폐기
-- [ ] task.md human summary 생성
-- [ ] source/overlay/annotated/task JSON bundle 작성
+- [x] visible DOM candidate collector
+- [x] 민감 attribute/value redaction
+- [x] role/accessibility name/text summary 추출
+- [x] selector hint 생성: test ID → stable ID → role/name → structural hint 순서
+- [x] rect intersection 및 containment scoring
+- [x] freehand path proximity scoring
+- [x] arrow source/destination grounding
+- [x] nearest container fallback
+- [x] parent/sibling summary
+- [x] computed layout allowlist
+- [x] group별 target ranking과 중복 제거
+- [x] temporary full index 폐기
+- [x] task.md human summary 생성 (Phase 1 storage.ts에서 이미 구현됨, 이번 phase에서 실제 grounded VisualTask로 재확인)
+- [x] source/overlay/annotated/task JSON bundle 작성
 
 ### 정확도 원칙
 
@@ -231,19 +231,34 @@ UI보다 먼저 안정적인 task/session schema와 상태 전이를 만든다.
 
 ### 테스트
 
-- [ ] flex/grid/absolute layout fixture
-- [ ] nested interactive element
-- [ ] text 없는 icon button
-- [ ] scroll offset
-- [ ] device scale factor
-- [ ] blank area sketch
-- [ ] password/input value redaction
-- [ ] DOM mutation 직전/직후 capture consistency
+- [x] flex/grid/absolute layout fixture
+- [x] nested interactive element
+- [x] text 없는 icon button
+- [x] scroll offset
+- [x] device scale factor
+- [x] blank area sketch
+- [x] password/input value redaction
+- [x] DOM mutation 직전/직후 capture consistency
 
 ### 완료 조건
 
 - fixture acceptance set에서 표시된 대상이 top candidates 안에 포함된다.
 - task bundle에 금지된 input value, cookie, storage data가 없다.
+
+### Phase 3 실행 결과 (2026-09-01)
+
+`packages/grounding/src/`에 구현. 유닛 테스트 14/14, 실제 Chromium e2e grounding 테스트 10/10, capture→annotate→ground→assemble→atomic bundle write→read-back 통합 테스트 1/1 (전부 `pnpm --filter @redpen/grounding run test`), `tsc --noEmit` clean.
+
+- `collector-source.ts`: Phase 0에서 확립한 원칙(브라우저에 주입되는 코드는 컴파일러 헬퍼에 의존하지 않는 순수 문자열 소스)을 그대로 따라 `COLLECTOR_SOURCE` 문자열을 `page.evaluate(sourceText)`로 실행. rect/tag/role/accessible name/text summary/testId/id/class hint뿐 아니라 parent/sibling summary와 computedLayout allowlist까지 한 번에 수집.
+- `selector-hints.ts`: test-id → stable id → role/name → class → tag 순서로 hint를 쌓는다. 마지막 tag fallback은 항상 존재해서 target이 selector-less가 되지 않는다. hint는 실행 가능한 selector를 보장하지 않는다는 점을 문서화.
+- `ground.ts`: rectangle/ellipse/mask는 intersection-over-union으로 스코어링(작고 딱 맞는 후보가 큰 조상 요소보다 높은 점수를 받도록 IoU를 채택 — 단순 containment/coverage 비율만 쓰면 거대 조상이 더 높게 나오는 문제를 테스트로 발견해 수정). freehand는 path 위 표본점과 후보 rect 사이 최소 거리로 근접도 스코어링. arrow는 `from`을 `arrow-source`, `to`를 `arrow-destination`으로 각각 독립적으로 nearest-container 매칭. text는 anchor point 최근접. 빈 영역 스케치는 모든 1차 스코어링이 0을 반환하면 mark bounds 중심점 기준 nearest-container로 폴백. `buildDomTargets`는 mark 여러 개가 같은 tempId 후보에 그라운딩되면 하나의 DomTarget으로 합치고 `groupIds`만 누적(중복 제거), computedLayout은 12개 allowlist 키만 통과.
+- `capture.ts`: `collectDomIndex`(collector 실행) + `captureAndGround`(grounding까지 포함) 두 단계로 분리. 호출자는 grounding이 끝나면 `RawDomIndex`를 더 들고 있지 않아야 한다 — 전체 temporary index는 함수 반환 후 GC됨 (docs/ARCHITECTURE.md §4.3의 "제출/취소 후 폐기" 요구를 코드 구조로 강제).
+- `redaction.ts`: `assertNoForbiddenValues`로 임의의 직렬화 결과에 금지 문자열이 없는지 검증하는 재사용 가능한 assertion. bundle 통합 테스트와 grounding 유닛 테스트 양쪽에서 사용.
+- `assemble.ts`: annotator-core store 상태 + grounded target을 `VisualTask`로 합치며 각 `InstructionGroup.targetIds`를 `target.groupIds`에서 역산해 채운다.
+- `fixtures/frontend/grounding.html`: flex row, grid, absolute 카드, nested wrapper+button, icon-only button, 2000px 스크롤 후 요소, password input, 빈 영역을 모두 포함한 결정론적 fixture.
+- `packages/grounding/src/bundle.e2e.test.ts`: 실제 Chromium으로 fixture를 열고, `@redpen/annotator-core`로 두 그룹(카드 지적 + password 필드 지적)을 그린 뒤 grounding, `assembleVisualTask`, `@redpen/protocol`의 `writeTaskBundle`/`readTaskBundle`까지 전부 실행해 파이프라인 전체가 맞물려 동작함을 확인. password 값은 어디에도 나타나지 않지만 password 필드 자체는 여전히 유효한 grounding 후보로 남는다.
+
+**미해결 항목**: DOM target ranking의 IoU 스코어링은 겹치는 후보가 정확히 동일한 경우(완전히 같은 rect를 가진 두 엘리먼트) 순서가 삽입 순서에 의존한다 — 실제 페이지에서는 드문 경우이므로 지금은 허용하고 별도 tie-break는 추가하지 않았다. daemon/CLI에서 실제 submit 흐름에 이 패키지를 연결하는 일은 Phase 4로 넘긴다.
 
 ## 7. Phase 4 — CLI lifecycle
 

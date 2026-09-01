@@ -1,0 +1,27 @@
+{
+  "name": "@redpen/grounding",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./collector-source": "./src/collector-source.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/*.test.ts",
+    "test:unit": "tsx --test src/ground.test.ts src/selector-hints.test.ts"
+  },
+  "dependencies": {
+    "@redpen/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@redpen/annotator-core": "workspace:*",
+    "@types/node": "^22.10.0",
+    "playwright": "^1.48.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
