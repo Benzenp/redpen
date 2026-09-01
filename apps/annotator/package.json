@@ -1,0 +1,22 @@
+{
+  "name": "@redpen/annotator",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/build.mjs",
+    "e2e": "pnpm run build && tsx src/e2e-check.ts"
+  },
+  "dependencies": {
+    "@redpen/annotator-core": "workspace:*",
+    "@redpen/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.28.0",
+    "playwright": "^1.48.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

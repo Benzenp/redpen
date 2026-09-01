@@ -5,4 +5,6 @@ dist/
 .pnpm-store/
 apps/cli/.spike-profile/
 apps/cli/.spike-output/
+apps/annotator/.e2e-output/
+apps/annotator/public/client.bundle.js
 .gjc/

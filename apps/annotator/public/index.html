@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>Redpen annotator demo</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; display: flex; }
+    #canvas-area { position: relative; }
+    #screenshot-source { display: none; }
+    canvas { border-right: 1px solid #ddd; display: block; }
+    #sidebar { width: 260px; padding: 12px; }
+    .group-card { border: 2px solid #ccc; border-radius: 8px; padding: 8px; margin-bottom: 8px; cursor: pointer; }
+    .group-card.active { outline: 3px solid #000; }
+    button { margin: 2px; }
+  </style>
+</head>
+<body>
+  <div id="canvas-area">
+    <img id="screenshot-source" src="./fixture-screenshot.png" alt="" />
+    <canvas id="annotation-canvas"></canvas>
+  </div>
+  <div id="sidebar">
+    <div id="group-cards"></div>
+    <button id="new-instruction">새 지시</button>
+    <div id="submit-status"></div>
+  </div>
+  <script src="./client.bundle.js"></script>
+  <script>
+    // Thin wiring layer: connects the bundled AnnotatorApp to the DOM. Kept
+    // deliberately minimal (no framework) since the goal of this demo is to
+    // verify the canvas-first architecture end-to-end via Playwright, not to
+    // ship the production UI polish (which is out of Phase 2's automated
+    // scope here).
+    const img = document.getElementById('screenshot-source');
+    const canvas = document.getElementById('annotation-canvas');
+
+    function boot() {
+      const app = new window.RedpenAnnotator.AnnotatorApp({
+        canvas,
+        screenshotImage: img,
+        frameId: 'frm_demo',
+        viewport: { width: img.naturalWidth || 1280, height: img.naturalHeight || 900 },
+      });
+      window.__redpenApp = app;
+      app.render();
+      renderSidebar();
+
+      document.getElementById('new-instruction').addEventListener('click', () => {
+        app.createGroup();
+        renderSidebar();
+      });
+
+      function renderSidebar() {
+        const container = document.getElementById('group-cards');
+        container.innerHTML = '';
+        for (const group of app.store.getGroups()) {
+          const card = document.createElement('div');
+          card.className = 'group-card' + (group.id === app.store.getActiveGroupId() ? ' active' : '');
+          card.style.borderColor = group.color;
+          card.textContent = `#${group.number}`;
+          card.dataset.groupId = group.id;
+          card.addEventListener('click', () => {
+            app.setActiveGroup(group.id);
+            renderSidebar();
+          });
+          container.appendChild(card);
+        }
+      }
+      window.__redpenRenderSidebar = renderSidebar;
+    }
+
+    if (img.complete) {
+      boot();
+    } else {
+      img.addEventListener('load', boot);
+    }
+  </script>
+</body>
+</html>

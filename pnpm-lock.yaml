@@ -8,11 +8,52 @@ importers:
 
   .: {}
 
+  apps/annotator:
+    dependencies:
+      '@redpen/annotator-core':
+        specifier: workspace:*
+        version: link:../../packages/annotator-core
+      '@redpen/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.2
+      playwright:
+        specifier: ^1.48.0
+        version: 1.62.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.13
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+
   apps/cli:
     dependencies:
       playwright:
         specifier: ^1.48.0
         version: 1.62.1
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.13
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+
+  packages/annotator-core:
+    dependencies:
+      '@redpen/protocol':
+        specifier: workspace:*
+        version: link:../protocol
     devDependencies:
       '@types/node':
         specifier: ^22.10.0

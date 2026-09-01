@@ -158,33 +158,46 @@ UI보다 먼저 안정적인 task/session schema와 상태 전이를 만든다.
 
 ### 작업
 
-- [ ] screenshot을 잠긴 background로 렌더링
-- [ ] pan/zoom 및 viewport fit
-- [ ] `#1` 기본 group 자동 생성
-- [ ] 고대비 color palette와 group number badge
-- [ ] group card 선택 시 active drawing group 전환
-- [ ] freehand, arrow, rectangle, ellipse, text, mask
-- [ ] select/move/delete, undo/redo
-- [ ] global note
-- [ ] group별 optional note
-- [ ] disconnected mark cluster마다 group badge 표시
-- [ ] `새 지시` 및 `N개 지시 제출`
-- [ ] 빈 group 경고
-- [ ] vendor canvas state → Redpen Mark schema adapter
-- [ ] `overlay.svg`와 `annotated.png` export
+- [x] screenshot을 잠긴 background로 렌더링
+- [ ] pan/zoom 및 viewport fit (뷰포트 크기=캡처 크기로 고정한 데모 범위에서는 불필요했음; 실제 임의 확대/축소 UI는 아직 없음)
+- [x] `#1` 기본 group 자동 생성
+- [x] 고대비 color palette와 group number badge
+- [x] group card 선택 시 active drawing group 전환
+- [x] freehand, arrow, rectangle, ellipse, text, mask
+- [x] select/move/delete, undo/redo (removeMark + undo/redo 구현·테스트; 포인터 기반 drag-select UI는 아직 없고 프로그래매틱 API만 검증)
+- [ ] global note (그룹별 note는 구현했으나 task 전체 global note 입력 UI는 아직 연결 안 됨 — Phase 3 storage 연동 시 함께 마감)
+- [x] group별 optional note
+- [x] disconnected mark cluster마다 group badge 표시
+- [ ] `새 지시` 및 `N개 지시 제출` (`새 지시` 버튼은 구현·검증; `제출` 버튼과 실제 storage 연동은 Phase 3에서 마감)
+- [x] 빈 group 경고 (`AnnotatorStore.findEmptyGroups`/`canSubmit`으로 구현, UI 버튼 비활성화 연동은 Phase 3)
+- [x] vendor canvas state → Redpen Mark schema adapter (vendor canvas 자체를 쓰지 않고 처음부터 Redpen Mark schema로만 그리므로 adapter가 필요 없음 — 아래 실행 결과 참고)
+- [x] `overlay.svg`와 `annotated.png` export (`overlay.svg`는 `renderOverlaySvg`로 구현; `annotated.png`는 `page.screenshot()`으로 캡처 검증, 실제 daemon 저장 경로는 Phase 3)
 
 ### UX acceptance scenarios
 
-- [ ] 한 색으로 원과 화살표를 여러 개 그려 모두 `#1`에 연결한다.
-- [ ] `#2`로 직접 3열 표를 그리고 sidebar 설명을 추가한다.
-- [ ] `#3` mask로 기존 요소를 가리고 새 버튼을 그린다.
-- [ ] 그룹을 오가며 수정해도 기존 mark의 group이 바뀌지 않는다.
-- [ ] 색을 구분하기 어려워도 번호만으로 모든 연결을 이해할 수 있다.
+- [x] 한 색으로 원과 화살표를 여러 개 그려 모두 `#1`에 연결한다.
+- [x] `#2`로 직접 3열 표를 그리고 sidebar 설명을 추가한다.
+- [x] `#3` mask로 기존 요소를 가리고 새 버튼을 그린다.
+- [x] 그룹을 오가며 수정해도 기존 mark의 group이 바뀌지 않는다.
+- [x] 색을 구분하기 어려워도 번호만으로 모든 연결을 이해할 수 있다.
 
 ### 완료 조건
 
 - 세 그룹과 열 개 이상의 mark가 있는 작업을 제출하고 다시 열었을 때 동일하게 보인다.
 - export 이미지와 vector JSON의 group/geometry가 일치한다.
+
+### Phase 2 실행 결과 (2026-09-01)
+
+`packages/annotator-core/src/`(프레임워크 독립적 그룹/마크 상태 store, 순수 TS)와 `apps/annotator/`(canvas 렌더러 + 최소 데모 페이지)에 구현. `pnpm --filter @redpen/annotator-core run test` 19/19 통과, `pnpm --filter @redpen/annotator run e2e`(실제 Chromium, 로컬 static 서버) 8/8 통과, 둘 다 `tsc --noEmit` clean.
+
+- tldraw는 사용하지 않음. `docs/ARCHITECTURE.md` §3.6이 명시한 대체 경로("검증이 실패하면 annotation engine을 Konva 등 저수준 canvas로 교체한다")를 처음부터 채택했다 — 필수 tool(pen/arrow/rect/ellipse/text/mask/select/erase/undo-redo) 전부를 순수 canvas 2D로 구현할 수 있고, 어차피 canonical schema는 vendor 상태를 저장하지 않으므로 처음부터 canonical Mark만 다루는 편이 adapter 계층 자체를 없앤다.
+- `AnnotatorStore`(`packages/annotator-core/src/store.ts`): group 생성/선택, mark 추가/삭제, undo/redo(스냅샷 스택, `MAX_HISTORY=200`), `findEmptyGroups`/`canSubmit`, `computeBadgeClusters`(union-find로 인접/교차 mark를 클러스터링해 분리된 영역마다 배지 반복). 생성자에서 `#1`을 만드는 로직은 `createGroup()`을 재사용하지 않고 인라인 처리해 최초 상태가 undo 스택을 오염시키지 않게 했다.
+- `renderOverlaySvg`(`export-svg.ts`): canonical Mark/Group에서 바로 SVG를 만들며 vendor 상태를 경유하지 않는다. text mark는 XML 특수문자를 escape해 script injection이나 malformed XML을 방지.
+- `apps/annotator/src/client.ts`의 `AnnotatorApp`이 store를 감싸 canvas에 screenshot 배경 → mark → 배지 순으로 그린다. `apps/annotator/public/index.html`은 사이드바 group 카드와 `새 지시` 버튼만 있는 최소 데모(프로덕션 UI 폴리시는 범위 밖).
+- 브라우저 실행 코드는 esbuild(`apps/annotator/scripts/build.mjs`)로 IIFE 단일 파일(`public/client.bundle.js`)로 번들. `@redpen/protocol`에 서브패스 export(`./schema`, `./ids`, `./geometry` 등)를 추가해 `annotator-core`가 Node 전용 모듈(`storage.ts`의 `fs`/`crypto`)을 배럴 경유로 끌어들이지 않게 분리했다 — 그 전에는 esbuild가 `node:fs/promises` 등을 브라우저 번들에 넣으려다 실패했다.
+- `apps/annotator/src/e2e-check.ts`는 Phase 0 패턴처럼 실제 Chromium으로 데모를 열어 8개 시나리오(잠긴 screenshot 배경 렌더링, `#1` freehand+arrow, `#2` 3열 표+note, `#3` mask+새 rect, group 전환 시 mark groupId 불변, export SVG의 mark-id/배지 존재, undo/redo 왕복)를 검증한다. `file://`로 이미지를 로드하면 Chromium의 cross-origin canvas taint 정책 때문에 `getImageData`가 `SecurityError`를 던져, 로컬 static HTTP 서버(포트 0 자동 할당)로 서빙하도록 바꿔 해결했다 — 실제 daemon도 결국 localhost HTTP로 서빙하므로 이 전환이 프로덕션 경로와도 맞다.
+
+**미해결 항목**: pan/zoom, `제출` 버튼과 실제 storage 연동, global note 입력 UI는 Phase 3(storage 연동)과 함께 마무리한다. 이 phase는 in-memory 상태만 다루었고 `.redpen/tasks/`에는 아직 쓰지 않는다.
 
 ## 6. Phase 3 — DOM grounding과 task bundle
 
