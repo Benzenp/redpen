@@ -40,39 +40,50 @@ Submission is not implementation approval. The task remains `submitted` until th
 
 - Node.js 20 or newer
 - Corepack
+- Git (for the one-command source installer)
 - A target app served from `localhost`, `127.0.0.1`, or `::1`
 
 Redpen installs its dedicated Playwright Chromium during package installation.
 
 ## Install
 
-Install the latest GitHub release globally:
+From the project you want to annotate, run one command.
 
-```bash
-npm install -g https://github.com/Benzenp/redpen/releases/download/v0.2.0/redpen-cli-0.2.0.tgz
+PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/Benzenp/redpen/master/install-redpen.ps1 | iex
 ```
 
-Verify the daemon:
+Bash:
 
 ```bash
-redpen daemon start
-redpen daemon status
-redpen daemon stop
+curl -fsSL https://raw.githubusercontent.com/Benzenp/redpen/master/install-redpen.sh | bash
 ```
 
-For a Vue/Vite project:
+The installer builds the current Redpen CLI, installs it globally, and adds
+the Claude Code skill, `/redpen` command, and MCP configuration to the current
+project without replacing unrelated MCP entries. Restart Claude Code after
+installation.
 
-```bash
-cd your-vue-project
-npm run dev
-redpen open http://localhost:5173 --project .
+Use Redpen from the coding-agent prompt:
+
+```text
+/redpen
+/redpen /customers/42
+/redpen http://127.0.0.1:5173/settings
 ```
 
-Run the dev server and `redpen open` in separate terminals. The Node daemon
-runs as a hidden background process on Windows while Chromium remains visible.
-Press **F9** in Chromium to capture and annotate the current page. Closing the
-dedicated Chromium window automatically shuts down the Redpen daemon and
-removes its discovery record.
+With no argument, Redpen opens the detected local app's root page. A route is
+resolved against that app's origin; a complete loopback URL is opened exactly.
+The command reuses an existing workspace dev server and starts a managed one
+only when necessary.
+
+For Codex installation, set `REDPEN_HOST=codex` before running the same
+installer. Codex exposes the installed skill as `$redpen`.
+
+Manual CLI installation remains available from a release package, followed by
+`redpen install --host <claude|codex|all> --project <workspace>`.
 
 The target dev server is a separate process. If an agent starts it for a
 Redpen session, that agent must retain ownership of its process tree and stop
@@ -116,6 +127,8 @@ managed `demo:redpen` flow instead.
 ## CLI
 
 ```bash
+redpen install --host <claude|codex|all> --project <workspace>
+
 redpen daemon start
 redpen daemon status
 redpen daemon stop

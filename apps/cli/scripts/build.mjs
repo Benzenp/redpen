@@ -8,6 +8,7 @@ const cliRoot = path.resolve(__dirname, '..');
 const repositoryRoot = path.resolve(cliRoot, '../..');
 const distDir = path.join(cliRoot, 'dist');
 const publicDir = path.join(distDir, 'public');
+const redpenAssetDir = path.join(distDir, 'assets', 'redpen');
 const internalPackagePattern = /^@redpen\/(annotator-core|grounding|protocol|review)(?:\/(.+))?$/;
 
 const bundleInternalPackages = {
@@ -48,3 +49,10 @@ await mkdir(publicDir, { recursive: true });
 for (const asset of ['session.html', 'session.bundle.js']) {
   await copyFile(path.join(repositoryRoot, 'apps/annotator/public', asset), path.join(publicDir, asset));
 }
+
+await mkdir(path.join(redpenAssetDir, 'commands'), { recursive: true });
+await copyFile(path.join(repositoryRoot, 'skills/redpen/SKILL.md'), path.join(redpenAssetDir, 'SKILL.md'));
+await copyFile(
+  path.join(repositoryRoot, 'skills/redpen/commands/redpen.md'),
+  path.join(redpenAssetDir, 'commands', 'redpen.md'),
+);

@@ -183,6 +183,30 @@ async function main(): Promise<number> {
         return EXIT_CODES.OK;
       }
 
+      case 'install': {
+        const host = flagValue(rest, '--host') ?? 'claude';
+        if (host !== 'claude' && host !== 'codex' && host !== 'all') {
+          printHuman('usage: redpen install [--host <claude|codex|all>] [--project <path>] [--json]');
+          return EXIT_CODES.USAGE_ERROR;
+        }
+        const { installRedpen } = await import('./install.js');
+        const mcpCommand = flagValue(rest, '--mcp-command') ?? 'redpen';
+        const mcpEntry = flagValue(rest, '--mcp-entry');
+        const installs = await installRedpen({
+          host,
+          projectRoot: workspaceRoot,
+          cliCommand: mcpCommand,
+          cliArgs: mcpEntry ? [mcpEntry, 'mcp'] : ['mcp'],
+        });
+        if (json) printJson({ installs });
+        else {
+          for (const install of installs) {
+            printHuman(`${install.host} installed:\n${install.paths.map((installedPath) => `  ${installedPath}`).join('\n')}`);
+          }
+        }
+        return EXIT_CODES.OK;
+      }
+
       case 'daemon': {
         const sub = rest[0];
         switch (sub) {
@@ -242,7 +266,7 @@ async function main(): Promise<number> {
 
       default:
         printHuman(
-          'usage: redpen <daemon|open|list|status|freeze|submit|wait|claim|review|accept|cancel|close|task|mcp> [...] [--json] [--project <path>]',
+          'usage: redpen <install|daemon|open|list|status|freeze|submit|wait|claim|review|accept|cancel|close|task|mcp> [...] [--json] [--project <path>]',
         );
         return EXIT_CODES.USAGE_ERROR;
     }

@@ -49,16 +49,31 @@ async function main() {
     const codexConfigPath = path.join(codexHome, 'config.toml');
     const codexConfig = (await readFile(codexConfigPath, 'utf8').catch(() => '')) ;
     record('install-codex-registers-mcp-server-block', codexConfig.includes('[mcp_servers.redpen]'), codexConfig.slice(0, 200));
+    record(
+      'install-codex-registers-source-cli-entry',
+      /command = "node"[\s\S]*args = \[\s*.*redpen\.mjs.*"mcp"\s*\]/.test(codexConfig),
+      codexConfig.slice(0, 300),
+    );
 
     const claudeResult = runBash(path.join(__dirname, 'install-claude.sh'), [claudeProject], {});
     record('install-claude-script-exits-zero', claudeResult.code === 0, `code=${claudeResult.code} stderr=${claudeResult.stderr.slice(0, 300)}`);
 
     const claudeSkillPath = path.join(claudeProject, '.claude', 'skills', 'redpen', 'SKILL.md');
     record('install-claude-copies-skill-md', await exists(claudeSkillPath), claudeSkillPath);
+    const claudeCommandPath = path.join(claudeProject, '.claude', 'commands', 'redpen.md');
+    const claudeCommand = await readFile(claudeCommandPath, 'utf8').catch(() => '');
+    record('install-claude-adds-redpen-slash-command', claudeCommand.includes('$ARGUMENTS'), claudeCommandPath);
 
     const claudeMcpConfigPath = path.join(claudeProject, '.mcp.json');
     const claudeMcpConfig = JSON.parse(await readFile(claudeMcpConfigPath, 'utf8').catch(() => '{}'));
     record('install-claude-writes-mcp-json', Boolean(claudeMcpConfig.mcpServers?.redpen), JSON.stringify(claudeMcpConfig));
+    record(
+      'install-claude-registers-source-cli-entry',
+      claudeMcpConfig.mcpServers?.redpen?.command === 'node'
+        && claudeMcpConfig.mcpServers.redpen.args?.at(-1) === 'mcp'
+        && claudeMcpConfig.mcpServers.redpen.args?.[0]?.endsWith('redpen.mjs'),
+      JSON.stringify(claudeMcpConfig.mcpServers?.redpen),
+    );
 
     const codexSkillContent = await readFile(codexSkillPath, 'utf8').catch(() => '');
     const claudeSkillContent = await readFile(claudeSkillPath, 'utf8').catch(() => '');

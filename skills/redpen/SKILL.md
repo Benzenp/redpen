@@ -25,6 +25,30 @@ Do **not** use it for requests that already fully specify the change in
 text — Redpen is for visual/spatial intent that is hard to describe in
 words.
 
+## Slash invocation
+
+Claude Code users invoke this skill through the installed command:
+
+```text
+/redpen
+/redpen /customers/42
+/redpen http://127.0.0.1:5173/settings
+```
+
+An empty argument targets the current local app's root page. A relative path
+is resolved against the detected local app origin, and a complete loopback URL
+is used exactly. Resolve the base origin in this order:
+
+1. an explicit `REDPEN_URL`;
+2. the URL reported by the workspace's already-running dev command;
+3. the single loopback HTTP server associated with this workspace;
+4. the workspace's framework/dev-server configuration.
+
+Never choose an unrelated listener merely because it uses a common port. If
+the workspace server is not running, start the project's existing dev script
+as an owned process and apply the required lifecycle cleanup below. Start the
+submission waiter immediately after opening the session.
+
 ## Golden flow
 
 ```text
@@ -147,11 +171,12 @@ permission.
 
 ## Setup
 
-- Codex CLI/IDE: run `scripts/install-codex.sh` (or `.ps1` on Windows) from
-  this skill's directory, or copy `SKILL.md` into your Codex skills
-  directory manually.
-- Claude Code: run `scripts/install-claude.sh` (or `.ps1`), or copy
-  `SKILL.md` into `.claude/skills/redpen/`.
+- Claude Code: run `redpen install --host claude --project <workspace>`. This
+  installs the skill, the `/redpen` command, and the MCP entry while preserving
+  unrelated project MCP configuration.
+- Codex CLI/IDE: run `redpen install --host codex`; invoke the installed skill
+  as `$redpen`.
+- Use `redpen install --host all --project <workspace>` to configure both.
 - Either host: the skill assumes a `redpen` CLI is on `PATH` (or reachable
   via the workspace's `apps/cli`) and calls `redpen mcp` to start the stdio
   MCP server; hosts configure this as an MCP server entry pointing at that

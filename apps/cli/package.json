@@ -18,7 +18,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "pack:check": "corepack pnpm pack --dry-run",
+    "pack:check": "npm pack --dry-run",
     "postinstall": "playwright install chromium",
     "spike:capture": "tsx src/spike/capture-spike.ts",
     "typecheck": "tsc --noEmit",
@@ -36,6 +36,7 @@
     "pixelmatch": "^5.3.0",
     "playwright": "^1.48.0",
     "pngjs": "^7.0.0",
+    "smol-toml": "^1.8.0",
     "ulid": "^2.3.0",
     "zod": "^3.23.8"
   },
