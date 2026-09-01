@@ -26,7 +26,9 @@ import os from 'node:os';
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import { EXIT_CODES } from './exit-codes.js';
 
+const EXIT_CODES_INVALID_STATE = EXIT_CODES.INVALID_STATE;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const cliEntry = path.resolve(__dirname, 'cli.ts');
@@ -177,6 +179,20 @@ async function main() {
       'workspace-a-session-list-excludes-workspace-b-session',
       !listAIds.includes(workspaceBSessionId) && listAIds.includes(sessionId),
       `workspaceA sessions=${JSON.stringify(listAIds)}`,
+    );
+
+    // --- cancel: a browsing session can be cancelled, and a cancelled session rejects further transitions ---
+    const cancelOpen = await runCli(['open', server.url, '--project', workspaceA, '--json'], env);
+    const cancelSessionId = JSON.parse(cancelOpen.stdout.trim()).session.id as string;
+    const cancelResult = await runCli(['cancel', cancelSessionId, '--json'], env);
+    const cancelJson = JSON.parse(cancelResult.stdout.trim());
+    record('cancel-transitions-to-cancelled', cancelJson.session?.state === 'cancelled', `state=${cancelJson.session?.state}`);
+
+    const freezeAfterCancel = await runCli(['freeze', cancelSessionId, '--json'], env);
+    record(
+      'cancelled-session-rejects-further-transitions',
+      freezeAfterCancel.code === EXIT_CODES_INVALID_STATE,
+      `code=${freezeAfterCancel.code} stdout=${freezeAfterCancel.stdout.trim()}`,
     );
 
     // --- CLI contract: a closed task can still be found again by task id ---

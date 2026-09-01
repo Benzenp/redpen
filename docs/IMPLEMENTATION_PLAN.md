@@ -339,6 +339,8 @@ open → status → user submit → wait returns task → update working → rev
 
 **여전히 미해결**: `redpen show`는 headless 데몬이라 탭을 실제로 열어줄 수 없어 `status`로 대체했다(UI 자체가 없으므로 이 우회는 유지).
 
+**추가 발견 및 해소 (아키텍처 서베이 후속)**: 코드베이스 서베이 결과 daemon 서버에는 `POST /sessions/:id/cancel` 라우트와 `DaemonClient.cancelSession()`이 이미 존재했는데 `cli.ts`에는 대응하는 `cancel` 명령이 빠져 있었다 — CLI 명령 목록과 실제 daemon 기능이 1:1로 맞지 않는 상태였다. `redpen cancel <session-id>` 명령을 추가해 맞췄다. 같이 발견한 문제: `InvalidSessionTransitionError`가 daemon에서 HTTP 400으로 매핑되는데 CLI의 exit code 매핑은 409만 `INVALID_STATE`로 취급하고 400은 `GENERIC_ERROR(1)`로 떨어지고 있었다(취소된 세션에 다시 `freeze`를 시도하면 사람이 보기엔 "잘못된 상태 전이"인데 CLI는 일반 에러로 보고). 400과 409를 모두 `INVALID_STATE(4)`로 매핑하도록 수정. `test:lifecycle`에 cancel 흐름 검증 2건을 추가해 18/18로 확장(재검증 시 exit code가 실제로 4가 나오는지까지 확인).
+
 ## 8. Phase 5 — MCP와 Agent Skill
 
 ### 목표

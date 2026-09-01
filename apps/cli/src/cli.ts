@@ -126,6 +126,15 @@ async function main(): Promise<number> {
         return EXIT_CODES.OK;
       }
 
+      case 'cancel': {
+        const sessionId = rest[0];
+        const client = await DaemonClient.connect();
+        const { session } = await client.cancelSession(sessionId);
+        if (json) printJson({ session });
+        else printHuman(`session ${sessionId} cancelled (state=${(session as { state: string }).state})`);
+        return EXIT_CODES.OK;
+      }
+
       case 'close': {
         const sessionId = rest[0];
         const client = await DaemonClient.connect();
@@ -194,7 +203,7 @@ async function main(): Promise<number> {
 
       default:
         printHuman(
-          'usage: redpen <daemon|open|list|status|freeze|submit|wait|claim|review|accept|close|task|mcp> [...] [--json] [--project <path>]',
+          'usage: redpen <daemon|open|list|status|freeze|submit|wait|claim|review|accept|cancel|close|task|mcp> [...] [--json] [--project <path>]',
         );
         return EXIT_CODES.USAGE_ERROR;
     }
@@ -202,7 +211,16 @@ async function main(): Promise<number> {
     if (err instanceof DaemonRequestError) {
       if (json) printJson({ error: err.name, message: err.message });
       else printHuman(`error: ${err.message}`);
-      return err.status === 404 ? EXIT_CODES.NOT_FOUND : err.status === 409 ? EXIT_CODES.INVALID_STATE : EXIT_CODES.GENERIC_ERROR;
+      // 400 covers both UnsupportedUrlError and InvalidSessionTransitionError
+      // (see errorToHttpStatus in daemon/server.ts); 409 covers
+      // NoActiveCaptureError. Both map to INVALID_STATE here since both mean
+      // "the request was well-formed but the session/task is not in a state
+      // that allows it" from the CLI caller's point of view.
+      return err.status === 404
+        ? EXIT_CODES.NOT_FOUND
+        : err.status === 400 || err.status === 409
+          ? EXIT_CODES.INVALID_STATE
+          : EXIT_CODES.GENERIC_ERROR;
     }
     if (json) printJson({ error: (err as Error).name, message: (err as Error).message });
     else printHuman(`error: ${(err as Error).message}`);
