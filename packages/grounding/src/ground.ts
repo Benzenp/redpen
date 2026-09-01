@@ -7,8 +7,8 @@
  * - rectangle/ellipse/mask: bounding-box intersection area / candidate area
  *   (containment and overlap both score well; a huge ancestor scores low).
  * - freehand: point-in-candidate-rect proximity sampled along the path.
- * - arrow: `from` point -> arrow-source nearest candidate,
- *          `to` point -> arrow-destination nearest candidate.
+ * - arrow/line: `from` point -> arrow-source nearest candidate,
+ *               `to` point -> arrow-destination nearest candidate.
  * - text: anchor point -> nearest containing element.
  * - blank-area sketch (no intersecting/near candidate at all): falls back to
  *   the nearest layout container by center-distance.
@@ -111,19 +111,23 @@ export function scoreCandidatesForMark(mark: Mark, index: RawDomIndex): ScoredCa
     case 'rectangle':
     case 'ellipse':
     case 'mask':
+    case 'patch':
       return scoreByOverlap(mark.bounds, index.candidates);
     case 'freehand':
       return scoreByProximity(mark.points, index.candidates);
     case 'text':
-      return nearestContainer(mark.anchor, index.candidates);
-    case 'arrow': {
+      return scoreByOverlap(mark.bounds, index.candidates);
+    case 'arrow':
+    case 'line': {
+      const sourceRelation: DomTargetRelation = mark.type === 'arrow' ? 'arrow-source' : 'line-start';
+      const destinationRelation: DomTargetRelation = mark.type === 'arrow' ? 'arrow-destination' : 'line-end';
       const sourceScored = nearestContainer(mark.from, index.candidates).map((s) => ({
         ...s,
-        relation: 'arrow-source' as const,
+        relation: sourceRelation,
       }));
       const destScored = nearestContainer(mark.to, index.candidates).map((s) => ({
         ...s,
-        relation: 'arrow-destination' as const,
+        relation: destinationRelation,
       }));
       return [...sourceScored, ...destScored];
     }
@@ -136,7 +140,7 @@ export function groundMark(mark: Mark, index: RawDomIndex): ScoredCandidate[] {
   if (primary.length > 0) {
     return primary.sort((a, b) => b.score - a.score).slice(0, MAX_TARGETS_PER_MARK);
   }
-  if (mark.type === 'arrow') return primary; // already tried nearest-container internally
+  if (mark.type === 'arrow' || mark.type === 'line') return primary; // already tried nearest-container internally
   const center = centerOf(mark.bounds);
   return nearestContainer(center, index.candidates);
 }

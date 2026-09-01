@@ -22,13 +22,17 @@ async function main() {
   // spawned this as a detached child and is waiting for the daemon to be up.
   console.log(JSON.stringify({ ready: true, port: daemon.port, pid: process.pid }));
 
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     await daemon.close();
     await clearDaemonDiscovery();
     process.exit(0);
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown());
+  daemon.server.once('redpenShutdownRequested', () => void shutdown());
 }
 
 main().catch((err) => {

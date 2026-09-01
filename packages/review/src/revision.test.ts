@@ -15,6 +15,7 @@ function baseTask(overrides: Partial<VisualTask> = {}): VisualTask {
     workspace: { root: '/workspace' },
     frames: [],
     groups: [],
+    references: [],
     marks: [],
     targets: [],
     ...overrides,
@@ -41,6 +42,7 @@ test('createRevision increments revision number and links parentTaskId', () => {
     parentTask: parent,
     frame: frame('frm_1'),
     groups: [],
+    references: [],
     marks: [],
     targets: [],
   });
@@ -54,14 +56,14 @@ test('createRevision increments revision number and links parentTaskId', () => {
 test('createRevision does not mutate the parent task object', () => {
   const parent = baseTask();
   const parentSnapshot = JSON.stringify(parent);
-  createRevision({ newTaskId: 'rpt_revision1', parentTask: parent, frame: frame('frm_1'), groups: [], marks: [], targets: [] });
+  createRevision({ newTaskId: 'rpt_revision1', parentTask: parent, frame: frame('frm_1'), groups: [], references: [], marks: [], targets: [] });
   assert.equal(JSON.stringify(parent), parentSnapshot);
 });
 
 test('a chain of three revisions resolves oldest-first via resolveRevisionChain', async () => {
   const original = baseTask({ id: 'rpt_v0' });
-  const v1 = createRevision({ newTaskId: 'rpt_v1', parentTask: original, frame: frame('frm_2'), groups: [], marks: [], targets: [] });
-  const v2 = createRevision({ newTaskId: 'rpt_v2', parentTask: v1, frame: frame('frm_3'), groups: [], marks: [], targets: [] });
+  const v1 = createRevision({ newTaskId: 'rpt_v1', parentTask: original, frame: frame('frm_2'), groups: [], references: [], marks: [], targets: [] });
+  const v2 = createRevision({ newTaskId: 'rpt_v2', parentTask: v1, frame: frame('frm_3'), groups: [], references: [], marks: [], targets: [] });
 
   const store = new Map<string, VisualTask>([
     ['rpt_v0', original],
@@ -81,7 +83,7 @@ test('resolveRevisionChain on a task with no parent returns just that task', asy
 
 test('resolveRevisionChain stops gracefully if a parent lookup returns null (missing/deleted parent)', async () => {
   const original = baseTask({ id: 'rpt_v0' });
-  const v1 = createRevision({ newTaskId: 'rpt_v1', parentTask: original, frame: frame('frm_2'), groups: [], marks: [], targets: [] });
+  const v1 = createRevision({ newTaskId: 'rpt_v1', parentTask: original, frame: frame('frm_2'), groups: [], references: [], marks: [], targets: [] });
   const chain = await resolveRevisionChain(v1, async () => null);
   assert.deepEqual(chain.map((t) => t.id), ['rpt_v1']);
 });

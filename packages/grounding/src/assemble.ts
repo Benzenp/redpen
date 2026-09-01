@@ -6,7 +6,7 @@
  * This is the seam Phase 4 (CLI submit) will call into once a daemon exists;
  * for now it is exercised directly by tests and the standalone submit-spike.
  */
-import type { DomTarget, Frame, InstructionGroup, Mark, VisualTask } from '@redpen/protocol/schema';
+import type { DomTarget, Frame, InstructionGroup, Mark, ReferenceAsset, VisualTask } from '@redpen/protocol/schema';
 import { SCHEMA_VERSION } from '@redpen/protocol/schema';
 
 export function assembleVisualTask(params: {
@@ -17,6 +17,7 @@ export function assembleVisualTask(params: {
   groups: readonly InstructionGroup[];
   marks: readonly Mark[];
   targets: readonly DomTarget[];
+  references: readonly ReferenceAsset[];
   globalNote?: string;
 }): VisualTask {
   const now = new Date().toISOString();
@@ -40,5 +41,6 @@ export function assembleVisualTask(params: {
     groups: groupsWithTargets,
     marks: [...params.marks],
     targets: [...params.targets],
+    references: [...params.references],
   };
 }

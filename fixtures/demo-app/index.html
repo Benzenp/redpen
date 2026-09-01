@@ -181,7 +181,18 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 16px;
-      max-width: 560px;
+    }
+    .settings-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 560px) minmax(240px, 1fr);
+      gap: 48px;
+      align-items: center;
+    }
+    .settings-layout .stat-card {
+      min-height: 118px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
     }
     .settings-form label {
       display: block;
@@ -203,6 +214,119 @@
       text-align: center;
       color: var(--muted);
       font-size: 14px;
+    }
+    .amount-widget {
+      min-height: 104px;
+      display: grid;
+      place-items: center;
+      border-style: solid;
+      background: #f8fafc;
+      color: var(--text);
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .bottom-widgets-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 322px;
+      gap: 16px;
+      align-items: stretch;
+      margin-top: -8px;
+      margin-bottom: 24px;
+    }
+    .bottom-widgets-row .stat-card {
+      min-height: 100%;
+    }
+    .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px 12px;
+    }
+    .chart-card h2 {
+      margin: 0 0 8px;
+    }
+    .chart-card svg {
+      display: block;
+      width: 100%;
+      height: 190px;
+    }
+    .chart-grid {
+      stroke: #e4e4e7;
+      stroke-width: 1;
+    }
+    .chart-axis {
+      stroke: #71717a;
+      stroke-width: 1.4;
+    }
+    .chart-label {
+      fill: #71717a;
+      font: 10px system-ui, sans-serif;
+    }
+    .chart-axis-title {
+      fill: #3f3f46;
+      font: 600 11px system-ui, sans-serif;
+    }
+    .chart-series {
+      fill: none;
+      stroke-width: 3;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    dialog {
+      width: min(480px, calc(100vw - 40px));
+      border: 0;
+      border-radius: 14px;
+      padding: 0;
+      color: var(--text);
+      box-shadow: 0 24px 64px rgba(15, 23, 42, 0.28);
+    }
+    dialog::backdrop {
+      background: rgba(15, 23, 42, 0.55);
+      backdrop-filter: blur(2px);
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 22px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-header h2 {
+      margin: 0;
+    }
+    .modal-close {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 24px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .modal-body {
+      padding: 22px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 0 22px 22px;
+    }
+    @media (max-width: 900px) {
+      .stat-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .stat-slot-empty {
+        display: none;
+      }
+      .settings-layout {
+        grid-template-columns: 1fr;
+      }
+      .bottom-widgets-row {
+        grid-template-columns: 1fr;
+      }
     }
     footer {
       padding: 16px 24px;
@@ -230,12 +354,14 @@
       <div class="menu-item" data-testid="menu-invoices">🧾 인보이스</div>
       <div class="menu-item" data-testid="menu-reports">📈 리포트</div>
       <div class="menu-item" data-testid="menu-settings">⚙️ 설정</div>
+      <div class="menu-item" data-testid="menu-home">🏠 집</div>
     </aside>
 
     <main>
       <div class="page-title">
         <h1>대시보드</h1>
         <div>
+          <button class="btn btn-outline" id="open-modal-button" data-testid="open-modal-button">모달 테스트</button>
           <button class="btn btn-outline" data-testid="export-button">내보내기</button>
           <button class="btn btn-primary" data-testid="new-invoice-button">+ 새 인보이스</button>
         </div>
@@ -252,16 +378,8 @@
           <div class="value">1,204</div>
           <div class="delta up">▲ 3.1%</div>
         </div>
-        <div class="stat-card" data-testid="stat-churn">
-          <div class="label">이탈률</div>
-          <div class="value">2.8%</div>
-          <div class="delta down">▼ 0.4%p</div>
-        </div>
-        <div class="stat-card" data-testid="stat-pending">
-          <div class="label">미결제 인보이스</div>
-          <div class="value">7건</div>
-          <div class="delta">₩3,120,000</div>
-        </div>
+        <div class="stat-slot-empty" aria-hidden="true"></div>
+        <div class="stat-slot-empty" aria-hidden="true"></div>
       </section>
 
       <section class="panel" data-testid="recent-invoices-panel">
@@ -316,39 +434,119 @@
 
       <section class="panel" data-testid="settings-panel">
         <h2>알림 설정</h2>
-        <div class="settings-form">
-          <div>
-            <label for="notify-email">알림 이메일</label>
-            <input id="notify-email" type="email" value="huia_paek@acme.test" data-testid="notify-email-input" />
+        <div class="settings-layout">
+          <div class="settings-form">
+            <div>
+              <label for="notify-email">알림 이메일</label>
+              <input id="notify-email" type="email" value="huia_paek@acme.test" data-testid="notify-email-input" />
+            </div>
+            <div>
+              <label for="notify-freq">알림 빈도</label>
+              <select id="notify-freq" data-testid="notify-freq-select">
+                <option>즉시</option>
+                <option selected>매일</option>
+                <option>매주</option>
+              </select>
+            </div>
+            <div>
+              <label for="notify-pw">API 키 (더미)</label>
+              <input id="notify-pw" type="password" value="sk-demo-not-a-real-key" data-testid="api-key-input" />
+            </div>
+            <div>
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" data-testid="save-settings-button">저장</button>
+            </div>
           </div>
-          <div>
-            <label for="notify-freq">알림 빈도</label>
-            <select id="notify-freq" data-testid="notify-freq-select">
-              <option>즉시</option>
-              <option selected>매일</option>
-              <option>매주</option>
-            </select>
-          </div>
-          <div>
-            <label for="notify-pw">API 키 (더미)</label>
-            <input id="notify-pw" type="password" value="sk-demo-not-a-real-key" data-testid="api-key-input" />
-          </div>
-          <div>
-            <label>&nbsp;</label>
-            <button class="btn btn-primary" data-testid="save-settings-button">저장</button>
+          <div class="stat-card" data-testid="stat-churn">
+            <div class="label">이탈률</div>
+            <div class="value">2.8%</div>
+            <div class="delta down">▼ 0.4%p</div>
           </div>
         </div>
       </section>
 
       <section class="panel" data-testid="empty-widget-panel">
         <h2>빈 위젯 영역</h2>
-        <div class="empty-panel" data-testid="empty-widget-placeholder">
-          여기에 새 위젯을 그려서 추가해보세요 (빈 영역 스케치 테스트용)
+        <div class="empty-panel amount-widget" data-testid="amount-widget" aria-label="100만원 위젯">
+          100만원
         </div>
       </section>
+
+      <div class="bottom-widgets-row">
+        <section class="chart-card" data-testid="sales-time-chart">
+          <h2>매출·시간 그래프</h2>
+          <svg viewBox="0 0 680 190" role="img" aria-labelledby="sales-time-chart-title sales-time-chart-desc">
+            <title id="sales-time-chart-title">매출 금액에 따른 소요 시간 그래프</title>
+            <desc id="sales-time-chart-desc">가로축은 만원, 세로축은 한 시간 단위이며 국내와 해외 두 계열을 표시합니다.</desc>
+
+            <g class="chart-grid">
+              <path d="M50 25H650 M50 50H650 M50 75H650 M50 100H650 M50 125H650 M50 150H650" />
+              <path d="M50 25V150 M170 25V150 M290 25V150 M410 25V150 M530 25V150 M650 25V150" />
+            </g>
+            <g class="chart-axis">
+              <path d="M50 20V150H656" fill="none" />
+            </g>
+
+            <g class="chart-label" text-anchor="end">
+              <text x="43" y="153">0</text>
+              <text x="43" y="128">1시간</text>
+              <text x="43" y="103">2시간</text>
+              <text x="43" y="78">3시간</text>
+              <text x="43" y="53">4시간</text>
+              <text x="43" y="28">5시간</text>
+            </g>
+            <g class="chart-label" text-anchor="middle">
+              <text x="50" y="166">0</text>
+              <text x="170" y="166">20</text>
+              <text x="290" y="166">40</text>
+              <text x="410" y="166">60</text>
+              <text x="530" y="166">80</text>
+              <text x="650" y="166">100</text>
+            </g>
+            <text class="chart-axis-title" x="350" y="184" text-anchor="middle">매출 금액 (만원)</text>
+            <text class="chart-axis-title" x="13" y="88" text-anchor="middle" transform="rotate(-90 13 88)">소요 시간 (1시간 단위)</text>
+
+            <path class="chart-series" d="M50 137 L170 112 L290 92 L410 62 L530 72 L650 37" stroke="#3b82f6" />
+            <path class="chart-series" d="M50 143 L170 127 L290 105 L410 87 L530 57 L650 70" stroke="#ef4444" />
+
+            <g class="chart-label">
+              <line x1="480" y1="13" x2="500" y2="13" stroke="#3b82f6" stroke-width="3" />
+              <text x="506" y="16">국내</text>
+              <line x1="555" y1="13" x2="575" y2="13" stroke="#ef4444" stroke-width="3" />
+              <text x="581" y="16">해외</text>
+            </g>
+          </svg>
+        </section>
+        <div class="stat-card" data-testid="stat-pending">
+          <div class="label">미결제 인보이스</div>
+          <div class="value">7건</div>
+          <div class="delta">₩3,120,000</div>
+        </div>
+      </div>
     </main>
   </div>
 
+  <dialog id="test-modal" data-testid="test-modal" aria-labelledby="test-modal-title">
+    <div class="modal-header">
+      <h2 id="test-modal-title">캡처 테스트 모달</h2>
+      <button class="modal-close" id="modal-close-button" aria-label="모달 닫기">×</button>
+    </div>
+    <div class="modal-body">
+      <p>모달이 열린 상태에서 F9을 눌러 Redpen 캡처와 DOM grounding이 정상적으로 동작하는지 확인하세요.</p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" id="modal-cancel-button">취소</button>
+      <button class="btn btn-primary" id="modal-confirm-button">확인</button>
+    </div>
+  </dialog>
+
   <footer>Acme Admin Demo · Redpen 테스트용 fixture · 실제 서비스 아님</footer>
+  <script>
+    const testModal = document.getElementById('test-modal');
+    document.getElementById('open-modal-button').addEventListener('click', () => testModal.showModal());
+    document.getElementById('modal-close-button').addEventListener('click', () => testModal.close());
+    document.getElementById('modal-cancel-button').addEventListener('click', () => testModal.close());
+    document.getElementById('modal-confirm-button').addEventListener('click', () => testModal.close('confirmed'));
+  </script>
 </body>
 </html>

@@ -13,7 +13,8 @@
     "./ids": "./src/ids.ts",
     "./paths": "./src/paths.ts",
     "./storage": "./src/storage.ts",
-    "./migrations": "./src/migrations.ts"
+    "./migrations": "./src/migrations.ts",
+    "./references": "./src/references.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

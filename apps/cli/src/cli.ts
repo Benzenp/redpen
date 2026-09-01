@@ -8,7 +8,13 @@
  */
 import { DaemonClient, DaemonRequestError } from './client/daemon-client.js';
 import { ensureDaemonRunning } from './client/ensure-daemon.js';
-import { readDaemonDiscovery, probeDaemonHealth, clearDaemonDiscovery } from './daemon/discovery.js';
+import {
+  readDaemonDiscovery,
+  probeDaemonHealth,
+  clearDaemonDiscovery,
+  isProcessAlive,
+  requestDaemonShutdown,
+} from './daemon/discovery.js';
 import { EXIT_CODES } from './exit-codes.js';
 
 function hasFlag(args: string[], name: string): boolean {
@@ -27,6 +33,30 @@ function printJson(value: unknown): void {
 
 function printHuman(text: string): void {
   process.stderr.write(text + '\n');
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForProcessExit(pid: number, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    await delay(50);
+  }
+  return !isProcessAlive(pid);
+}
+
+async function drainOutput(): Promise<void> {
+  await Promise.all(
+    [process.stdout, process.stderr].map(
+      (stream) =>
+        new Promise<void>((resolve, reject) => {
+          stream.write('', (error) => (error ? reject(error) : resolve()));
+        }),
+    ),
+  );
 }
 
 async function main(): Promise<number> {
@@ -176,10 +206,19 @@ async function main(): Promise<number> {
               else printHuman('daemon not-running');
               return EXIT_CODES.OK;
             }
-            try {
-              process.kill(discovery.pid, 'SIGTERM');
-            } catch {
-              // already dead; fall through to clearing the stale record.
+            const health = await probeDaemonHealth(discovery);
+            if (health === 'stale-pid') {
+              await clearDaemonDiscovery();
+              if (json) printJson({ stopped: false, reason: 'not-running' });
+              else printHuman('daemon not-running');
+              return EXIT_CODES.OK;
+            }
+            if (health !== 'running') {
+              throw new Error(`daemon record pid ${discovery.pid} failed authenticated health verification; refusing to signal it`);
+            }
+            await requestDaemonShutdown(discovery);
+            if (!(await waitForProcessExit(discovery.pid))) {
+              throw new Error(`daemon pid ${discovery.pid} did not terminate within 5s`);
             }
             await clearDaemonDiscovery();
             if (json) printJson({ stopped: true, pid: discovery.pid });
@@ -228,10 +267,8 @@ async function main(): Promise<number> {
   }
 }
 
-main().then((code) => {
+main().then(async (code) => {
   if (code === -1) return; // `mcp` command: stay alive to serve stdio requests.
-  // fetch()'s underlying undici keep-alive sockets can otherwise hold the
-  // event loop open after the CLI has already printed its one JSON line.
   process.exitCode = code;
-  process.exit(code);
+  await drainOutput();
 });

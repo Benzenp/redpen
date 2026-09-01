@@ -39,8 +39,12 @@ Agent: redpen_get_task(task_id) — read groups, marks, DOM targets, source/
 Agent: for each Instruction Group, summarize intent + likely source
        location(s) using the DOM target's selectorHints/context as a lead,
        not a guarantee
-Agent: present an implementation plan; only modify files if the user has
-       explicitly asked for the fix, not just for a plan
+Agent: present a concise intent confirmation: "제가 이해한 변경은
+       1) ... 2) ... 입니다. 이 의도가 맞나요?"
+User: explicitly confirms or corrects the interpretation
+Agent: only after confirmation, set state to working and implement
+Agent: set state to review; Redpen reloads and focuses the still-open target
+       page so the user sees the updated code
 ```
 
 ## Tools
@@ -78,15 +82,23 @@ Agent: present an implementation plan; only modify files if the user has
 - `task.globalNote` and each group's `note` carry the user's own words —
   treat these as the primary signal; DOM targets are supporting context, not
   the source of truth.
+- `task.groups[].referenceIds` links up to three reference images to that
+  Instruction Group. Resolve each ID through `task.references[]` and open its
+  task-relative `path`; references are visual context only and are never
+  canvas marks or requested pixel placement by themselves.
 - A group with no `targetIds` is valid: `docs/ARCHITECTURE.md` explicitly
   keeps a mark without a matched element (e.g. a sketch of a brand-new
   component in blank space).
 
 ## Default behavior: plan only
 
-Unless the user has explicitly asked you to implement the change, produce an
-implementation plan (one entry per Instruction Group: intent, matched
-code/DOM leads, ambiguity if any) and stop there. Only edit files when asked.
+Submission is never implementation approval by itself. After every submitted
+task, summarize the interpreted intent (one entry per Instruction Group:
+requested result, source/DOM lead, and any ambiguity) and ask the user to
+confirm it. Do not claim the task, edit product files, or run mutating commands
+until that confirmation arrives, even when the user originally said they want
+the eventual fix. Once confirmed, implement without asking for a second
+permission.
 
 ## Setup
 

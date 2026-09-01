@@ -1,64 +1,216 @@
 # Redpen
 
-> 말로 설명하기 어려운 UI 수정 사항을 화면에 직접 그려 코딩 에이전트에 전달하는 로컬 우선 비주얼 지시 도구.
+Redpen is a local-first visual feedback tool for coding agents. It opens a localhost app in Chromium, captures the exact screenshot and DOM state, and lets a user attach structured instructions directly to the interface.
 
-현재 저장소 상태는 **구현 전 설계 문서**다. 이 문서는 Codex CLI 또는 Claude Code에 넘겨 단계적으로 구현하기 위한 기준선이다.
+The agent receives a self-contained task bundle containing screenshots, vector marks, DOM targets, notes, and group-specific reference images.
 
-## 제품 한 줄 정의
+## Highlights
 
-에이전트가 수정할 로컬 페이지를 열어주면, 사용자는 실제 화면을 캡처해 색깔별 지시를 그리고 설명을 덧붙인다. Redpen은 표시와 연결된 DOM 문맥을 구조화해 Codex나 Claude 같은 네이티브 코딩 에이전트에 반환한다.
+- Pixel-accurate screenshot and DOM capture from the same browser state
+- Multiple color-coded instruction groups (`#1`, `#2`, ...)
+- Pen, arrow, straight line, rectangle, ellipse, bounded text, mask, eraser, and cut/move patch tools
+- Up to three pasted or drag-and-dropped reference images per instruction group
+- Reference images stay in the right sidebar and are never stamped onto the screenshot
+- Modal-aware capture and DOM grounding
+- Agent intent-confirmation gate before implementation
+- Automatic target-page refresh when a change enters review
+- CLI and MCP interfaces backed by the same daemon
+- English UI by default with a persistent Korean language switch
+- Local workspace storage only; no database or cloud service
 
-## 목표 경험
+## Workflow
 
 ```text
-사용자: "이 설정 페이지 수정할 거야. Redpen 열어봐."
-에이전트: localhost 페이지로 Redpen 세션 시작
-사용자: 원하는 상태로 이동 → 화면 고정 → #1, #2, #3 표시 → 제출
-에이전트: 이미지, 지시 그룹, DOM 문맥 확인 → 구현 계획 또는 수정
+Agent opens a Redpen session
+→ User navigates the target app
+→ User presses F9 to freeze the current state
+→ User draws instructions and attaches references
+→ User submits
+→ Agent summarizes its interpretation
+→ User confirms or corrects the interpretation
+→ Agent implements the confirmed change
+→ Redpen reloads and focuses the target page for review
 ```
 
-사용자가 알아야 하는 것은 페이지, 색깔, 번호, 설명, 제출뿐이다. DOM selector, CSS 값, 파일 경로는 제품 표면에 기본 노출하지 않는다.
+Submission is not implementation approval. The task remains `submitted` until the user confirms the agent's interpretation.
 
-## 핵심 결정
+## Requirements
 
-- 로컬 전용 Node.js/TypeScript CLI로 시작한다.
-- 모든 기능은 공용 application core를 통해 제공한다.
-- CLI가 기준 인터페이스이며 MCP는 같은 core를 호출하는 얇은 어댑터다.
-- Playwright가 전용 persistent Chromium을 관리한다.
-- 캡처 이미지와 같은 시점의 visible DOM index를 만든다.
-- 한 Visual Task 안에 여러 Instruction Group을 둘 수 있다.
-- 지시 그룹은 색으로 구분하지만 영구 식별자는 번호/ID다.
-- Redpen 자체에는 LLM이나 AI API를 넣지 않는다.
-- 저장 포맷은 Codex, Claude 및 다른 에이전트가 읽을 수 있도록 모델 독립적으로 유지한다.
-- MVP는 `localhost`와 `127.0.0.1`만 허용한다.
+- Node.js 20 or newer
+- Corepack
+- A target app served from `localhost`, `127.0.0.1`, or `::1`
 
-## 예상 CLI
+Redpen installs its dedicated Playwright Chromium during package installation.
+
+## Run from source
 
 ```bash
-redpen open http://localhost:5173/settings
-redpen list
-redpen status rp_01J... --json
-redpen wait rp_01J... --json
-redpen show rp_01J...
-redpen review rp_01J...
-redpen close rp_01J...
+corepack pnpm install --frozen-lockfile
+corepack pnpm run build
+corepack pnpm demo
+```
+
+In another terminal:
+
+```bash
+corepack pnpm --filter @redpen/cli exec redpen open http://127.0.0.1:4173/
+```
+
+The Node daemon runs as a hidden background process on Windows. Chromium remains visible by default.
+
+Press **F9** or use the in-page **Freeze screen** button to open the annotator.
+
+## CLI
+
+```bash
+redpen daemon start
+redpen daemon status
+redpen daemon stop
+
+redpen open <url> --project <workspace>
+redpen list --project <workspace>
+redpen status <session-id>
+redpen freeze <session-id>
+redpen wait <session-id> --timeout 600
+redpen task <task-id> --project <workspace>
+redpen claim <session-id>
+redpen review <session-id>
+redpen accept <session-id>
+redpen cancel <session-id>
+redpen close <session-id>
 redpen mcp
 ```
 
-명령 이름과 옵션은 구현 중 변경할 수 있지만, CLI-first 원칙과 JSON 출력 계약은 유지한다.
+Add `--json` for machine-readable output.
 
-## 문서
+### Browser mode
 
-- [제품 의도](docs/PRODUCT_INTENT.md)
-- [아키텍처](docs/ARCHITECTURE.md)
-- [구현 계획](docs/IMPLEMENTATION_PLAN.md)
+Chromium is visible by default. For automated checks only:
 
-## MVP 완료 조건
+```bash
+REDPEN_HEADLESS=1 redpen open http://127.0.0.1:4173/
+```
 
-1. 에이전트 또는 사용자가 CLI로 localhost URL의 Redpen 세션을 연다.
-2. 사용자가 실제 페이지를 탐색한 뒤 현재 viewport를 고정한다.
-3. 세 가지 이상의 색깔별 지시 그룹을 만들고, 각 그룹에 여러 표시와 선택적 설명을 연결한다.
-4. 제출 시 원본 이미지, 합성 이미지, 벡터 표시, 지시 그룹, 관련 DOM 문맥이 하나의 작업 번들로 저장된다.
-5. CLI와 MCP 모두 같은 작업을 조회할 수 있다.
-6. Codex와 Claude가 번들을 읽고 표시별 구현 계획을 만들 수 있다.
+PowerShell:
 
+```powershell
+$env:REDPEN_HEADLESS = "1"
+redpen open http://127.0.0.1:4173/
+```
+
+## Annotator
+
+### Instruction groups
+
+Every mark belongs to one numbered group. A group contains:
+
+- A fixed palette color
+- Canvas marks
+- An optional written note
+- Up to three reference images
+- Grounded DOM targets
+
+Images can be pasted into the active group or dropped onto a specific group card. Submitted references are copied into the immutable task bundle.
+
+### Text tool
+
+Drag a rectangle to create a bounded text editor. Text wraps and clips inside that region and uses the current instruction-group color.
+
+- `Ctrl/Cmd + Enter`: commit
+- Blur: commit
+- `Escape`: cancel
+
+### Keyboard shortcuts
+
+| Key | Tool |
+| --- | --- |
+| `P` | Pen |
+| `A` | Arrow |
+| `L` | Straight line |
+| `R` | Rectangle |
+| `O` | Ellipse |
+| `T` | Text area |
+| `M` | Mask |
+| `C` | Cut/move patch |
+| `E` | Eraser |
+| `Ctrl/Cmd + Z` | Undo |
+| `Ctrl/Cmd + Shift + Z` | Redo |
+
+## Task bundle
+
+Redpen writes submitted tasks under:
+
+```text
+<workspace>/.redpen/tasks/<task-id>/
+├── task.json
+├── frames/
+│   └── frame-001/
+│       ├── source.png
+│       ├── annotated.png
+│       └── overlay.svg
+└── references/
+    └── <reference-id>.png
+```
+
+`task.json` is the canonical contract. It contains frames, instruction groups, marks, reference metadata, DOM targets, selector hints, and revision state.
+
+## Security model
+
+- The daemon binds only to `127.0.0.1`.
+- CLI/MCP bearer credentials are separate from browser capabilities.
+- Browser capabilities are scoped per session and surface.
+- Daemon identity uses an HMAC challenge-response probe.
+- Request bodies, PNG bytes, image dimensions, and pixel counts are bounded.
+- Discovery and reference metadata use owner-only, atomic storage.
+- Workspace paths and managed reference files reject traversal and symlink/junction escapes.
+- Target navigation is restricted to credential-free loopback HTTP(S) URLs.
+
+## Development
+
+```bash
+corepack pnpm install --frozen-lockfile
+corepack pnpm -r run typecheck
+corepack pnpm -r --if-present run test
+corepack pnpm run build
+```
+
+Browser integration checks:
+
+```bash
+REDPEN_HEADLESS=1 corepack pnpm --filter @redpen/cli run test:lifecycle
+REDPEN_HEADLESS=1 corepack pnpm --filter @redpen/cli run test:daemon-lifecycle
+REDPEN_HEADLESS=1 corepack pnpm --filter @redpen/cli run test:review-loop
+REDPEN_HEADLESS=1 corepack pnpm --filter @redpen/cli run test:ui-e2e
+REDPEN_HEADLESS=1 corepack pnpm --filter @redpen/cli run test:patch-reference
+```
+
+## Build a release package
+
+```bash
+corepack pnpm run build
+cd apps/cli
+corepack pnpm pack
+```
+
+The tarball contains only the executable launcher, bundled CLI/daemon JavaScript, source maps, package metadata, and annotator assets. Internal workspace packages are bundled into the CLI artifact.
+
+## Repository layout
+
+```text
+apps/
+├── annotator/       Browser annotation UI
+└── cli/             CLI, daemon, browser control, MCP server
+packages/
+├── annotator-core/  Mark store, SVG export, pixel compositing
+├── grounding/       DOM collection and mark-to-element grounding
+├── protocol/        Schemas, IDs, storage, references
+└── review/          Revision, diff, diagnostics, retention
+fixtures/
+└── demo-app/        Deterministic manual/E2E target
+skills/
+└── redpen/          Shared agent workflow
+```
+
+## Status
+
+Redpen is a production-packaged local developer tool at version `0.1.0`. The CLI package is ready to pack and publish; no external service is required.

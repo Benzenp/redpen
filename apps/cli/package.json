@@ -1,31 +1,51 @@
 {
   "name": "@redpen/cli",
-  "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "package.json"
+  ],
   "bin": {
     "redpen": "./bin/redpen.mjs"
   },
   "scripts": {
+    "build": "node scripts/build.mjs",
+    "pack:check": "corepack pnpm pack --dry-run",
+    "postinstall": "playwright install chromium",
     "spike:capture": "tsx src/spike/capture-spike.ts",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test --experimental-test-module-mocks src/**/*.test.ts",
     "test:lifecycle": "tsx src/lifecycle-check.ts",
     "test:mcp": "tsx src/mcp/mcp-check.ts",
     "test:review-loop": "tsx src/review-loop-check.ts",
     "test:daemon-lifecycle": "tsx src/daemon-lifecycle-check.ts",
-    "test:ui-e2e": "tsx src/ui-e2e-check.ts"
+    "test:ui-e2e": "tsx src/ui-e2e-check.ts",
+    "test:patch-reference": "tsx src/patch-reference-e2e-check.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.0",
+    "pixelmatch": "^5.3.0",
+    "playwright": "^1.48.0",
+    "pngjs": "^7.0.0",
+    "ulid": "^2.3.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
     "@redpen/annotator-core": "workspace:*",
     "@redpen/grounding": "workspace:*",
     "@redpen/protocol": "workspace:*",
     "@redpen/review": "workspace:*",
-    "playwright": "^1.48.0",
-    "zod": "^3.23.8"
-  },
-  "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pngjs": "^6.0.5",
+    "esbuild": "^0.28.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }

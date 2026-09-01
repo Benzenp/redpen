@@ -50,6 +50,7 @@ export class AnnotatorStore {
       state: 'draft',
       markIds: [],
       targetIds: [],
+      referenceIds: [],
     };
     this.groups.push(group);
     this.activeGroupId = group.id;
@@ -57,14 +58,24 @@ export class AnnotatorStore {
 
   private snapshot(): AnnotatorSnapshot {
     return {
-      groups: this.groups.map((g) => ({ ...g, markIds: [...g.markIds], targetIds: [...g.targetIds] })),
+      groups: this.groups.map((g) => ({
+        ...g,
+        markIds: [...g.markIds],
+        targetIds: [...g.targetIds],
+        referenceIds: [...g.referenceIds],
+      })),
       marks: [...this.marks],
       activeGroupId: this.activeGroupId,
     };
   }
 
   private restore(snapshot: AnnotatorSnapshot): void {
-    this.groups = snapshot.groups.map((g) => ({ ...g, markIds: [...g.markIds], targetIds: [...g.targetIds] }));
+    this.groups = snapshot.groups.map((g) => ({
+      ...g,
+      markIds: [...g.markIds],
+      targetIds: [...g.targetIds],
+      referenceIds: [...g.referenceIds],
+    }));
     this.marks = [...snapshot.marks];
     this.activeGroupId = snapshot.activeGroupId;
   }
@@ -102,6 +113,7 @@ export class AnnotatorStore {
       state: 'draft',
       markIds: [],
       targetIds: [],
+      referenceIds: [],
     };
     this.groups.push(group);
     this.activeGroupId = group.id;
@@ -123,6 +135,25 @@ export class AnnotatorStore {
     this.pushHistory();
     group.note = note;
     group.state = 'ready';
+  }
+
+  attachReference(groupId: string, referenceId: string): void {
+    const group = this.groups.find((g) => g.id === groupId);
+    if (!group) throw new Error(`unknown groupId: ${groupId}`);
+    if (group.referenceIds.includes(referenceId)) return;
+    if (group.referenceIds.length >= 3) {
+      throw new Error(`group ${groupId} cannot have more than 3 references`);
+    }
+    this.pushHistory();
+    group.referenceIds.push(referenceId);
+  }
+
+  detachReference(groupId: string, referenceId: string): void {
+    const group = this.groups.find((g) => g.id === groupId);
+    if (!group) throw new Error(`unknown groupId: ${groupId}`);
+    if (!group.referenceIds.includes(referenceId)) return;
+    this.pushHistory();
+    group.referenceIds = group.referenceIds.filter((id) => id !== referenceId);
   }
 
   /** Adds a mark to the currently active group. */

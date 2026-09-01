@@ -15,6 +15,7 @@ function task(overrides: Partial<VisualTask> = {}): VisualTask {
     workspace: { root: '/workspace' },
     frames: [],
     groups: [],
+    references: [],
     marks: [],
     targets: [],
     ...overrides,

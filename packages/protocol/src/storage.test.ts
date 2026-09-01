@@ -33,6 +33,7 @@ function makeTask(overrides: Partial<Record<string, unknown>> = {}) {
     workspace: { root: '/workspace' },
     frames: [],
     groups: [],
+    references: [],
     marks: [],
     targets: [],
     ...overrides,

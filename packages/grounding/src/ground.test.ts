@@ -80,6 +80,44 @@ test('arrow mark grounds from-point as arrow-source and to-point as arrow-destin
   assert.equal(destScore?.relation, 'arrow-destination');
 });
 
+test('line mark grounds endpoints as line-start and line-end', () => {
+  const start = candidate({ tempId: 'start', rect: { x: 0, y: 0, width: 20, height: 20 } });
+  const end = candidate({ tempId: 'end', rect: { x: 200, y: 200, width: 20, height: 20 } });
+  const mark: Mark = {
+    type: 'line',
+    id: 'mrk_line',
+    frameId: FRAME,
+    groupId: 'grp_1',
+    from: { x: 10, y: 10 },
+    to: { x: 210, y: 210 },
+    bounds: { x: 10, y: 10, width: 200, height: 200 },
+    normalizedBounds: { x: 10, y: 10, width: 200, height: 200 },
+  };
+
+  const scored = scoreCandidatesForMark(mark, makeIndex([start, end]));
+  assert.equal(scored.find((score) => score.candidate.tempId === 'start')?.relation, 'line-start');
+  assert.equal(scored.find((score) => score.candidate.tempId === 'end')?.relation, 'line-end');
+});
+
+test('bounded text grounds by its text box instead of only its anchor point', () => {
+  const textArea = candidate({ tempId: 'text-area', rect: { x: 100, y: 100, width: 180, height: 80 } });
+  const anchorOnly = candidate({ tempId: 'anchor-only', rect: { x: 0, y: 0, width: 20, height: 20 } });
+  const mark: Mark = {
+    type: 'text',
+    id: 'mrk_text_area',
+    frameId: FRAME,
+    groupId: 'grp_1',
+    anchor: { x: 10, y: 10 },
+    text: 'bounded text',
+    bounds: { x: 110, y: 110, width: 120, height: 40 },
+    normalizedBounds: { x: 110, y: 110, width: 120, height: 40 },
+  };
+
+  const scored = scoreCandidatesForMark(mark, makeIndex([anchorOnly, textArea]));
+  assert.equal(scored[0]?.candidate.tempId, 'text-area');
+  assert.equal(scored.some((score) => score.candidate.tempId === 'anchor-only'), false);
+});
+
 test('DOM target is not required for submission: an empty candidate index yields zero targets without throwing', () => {
   const mark = rectMark({ x: 0, y: 0, width: 10, height: 10 });
   const targets = buildDomTargets(FRAME, [mark], makeIndex([]));

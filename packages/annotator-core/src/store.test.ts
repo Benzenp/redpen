@@ -32,6 +32,7 @@ test('a new store auto-creates group #1 as the active group', () => {
   const groups = store.getGroups();
   assert.equal(groups.length, 1);
   assert.equal(groups[0].number, 1);
+  assert.deepEqual(groups[0].referenceIds, []);
   assert.equal(store.getActiveGroupId(), groups[0].id);
 });
 
@@ -185,4 +186,42 @@ test('computeBadgeClusters groups nearby marks into one cluster and distant mark
 test('setActiveGroup throws for an unknown groupId', () => {
   const store = new AnnotatorStore();
   assert.throws(() => store.setActiveGroup('grp_does_not_exist'));
+});
+
+test('groups start with no references and reject a fourth distinct reference', () => {
+  const store = new AnnotatorStore();
+  const group1 = store.getGroups()[0];
+  const group2 = store.createGroup();
+  assert.deepEqual(group2.referenceIds, []);
+
+  store.attachReference(group1.id, 'ref_1');
+  store.attachReference(group1.id, 'ref_2');
+  store.attachReference(group1.id, 'ref_3');
+  assert.deepEqual(store.getGroups()[0].referenceIds, ['ref_1', 'ref_2', 'ref_3']);
+
+  assert.throws(() => store.attachReference(group1.id, 'ref_4'));
+  assert.deepEqual(store.getGroups()[0].referenceIds, ['ref_1', 'ref_2', 'ref_3']);
+});
+
+test('attachReference and detachReference are idempotent and undoable', () => {
+  const store = new AnnotatorStore();
+  const groupId = store.getGroups()[0].id;
+
+  store.attachReference(groupId, 'ref_1');
+  store.attachReference(groupId, 'ref_1');
+  assert.deepEqual(store.getGroups()[0].referenceIds, ['ref_1']);
+
+  assert.equal(store.undo(), true);
+  assert.deepEqual(store.getGroups()[0].referenceIds, []);
+  assert.equal(store.redo(), true);
+  assert.deepEqual(store.getGroups()[0].referenceIds, ['ref_1']);
+
+  store.detachReference(groupId, 'ref_1');
+  store.detachReference(groupId, 'ref_1');
+  assert.deepEqual(store.getGroups()[0].referenceIds, []);
+
+  assert.equal(store.undo(), true);
+  assert.deepEqual(store.getGroups()[0].referenceIds, ['ref_1']);
+  assert.equal(store.redo(), true);
+  assert.deepEqual(store.getGroups()[0].referenceIds, []);
 });

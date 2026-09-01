@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Redpen — 화면에 지시 그리기</title>
+  <title>Redpen — Annotate the screen</title>
   <style>
     :root {
       --ink: #18181b;
@@ -36,7 +36,7 @@
     }
     #screenshot-source { display: none; }
     canvas { display: block; touch-action: none; }
-    canvas.tool-pen, canvas.tool-arrow, canvas.tool-rectangle, canvas.tool-ellipse, canvas.tool-mask { cursor: crosshair; }
+    canvas.tool-pen, canvas.tool-arrow, canvas.tool-line, canvas.tool-rectangle, canvas.tool-ellipse, canvas.tool-mask, canvas.tool-patch { cursor: crosshair; }
     canvas.tool-text { cursor: text; }
     canvas.tool-erase { cursor: cell; }
 
@@ -96,7 +96,7 @@
 
     /* ---------- sidebar ---------- */
     #sidebar {
-      width: 300px;
+      width: 360px;
       background: var(--surface);
       border-left: 1px solid var(--border);
       display: flex;
@@ -107,6 +107,31 @@
       flex: 1;
       overflow-y: auto;
       padding: 20px 16px;
+    }
+    .language-switch {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      margin-bottom: 18px;
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #f4f4f5;
+    }
+    .language-switch button {
+      border: 0;
+      border-radius: 6px;
+      padding: 6px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .language-switch button.active {
+      background: #fff;
+      color: var(--ink);
+      box-shadow: 0 1px 2px rgba(0,0,0,.08);
     }
     .section-label {
       font-size: 11px;
@@ -176,6 +201,41 @@
       font-size: 11px;
       margin-top: 6px;
     }
+    .reference-zone {
+      min-height: 58px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px;
+      margin-top: 8px;
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      color: var(--faint);
+      font-size: 11px;
+    }
+    .reference-zone.drag-over { border-color: var(--ink); background: var(--canvas-bg); }
+    .reference-zone .reference-empty { flex: 1; text-align: center; }
+    .reference-thumb { position: relative; width: 54px; height: 44px; flex: 0 0 auto; }
+    .reference-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 4px; }
+    .reference-thumb button {
+      position: absolute; top: -5px; right: -5px; width: 16px; height: 16px;
+      border: 1px solid var(--border); border-radius: 50%; background: var(--surface);
+      color: var(--ink); padding: 0; line-height: 12px; cursor: pointer;
+    }
+    .reference-zone .reference-capacity { margin-left: auto; align-self: flex-end; }
+    .canvas-text-editor {
+      position: absolute;
+      z-index: 4;
+      resize: none;
+      overflow: hidden;
+      padding: 2px;
+      border: 1px solid var(--ink);
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.92);
+      font: 14px sans-serif;
+      line-height: 1.25;
+      outline: none;
+    }
 
     #global-note {
       width: 100%;
@@ -218,6 +278,35 @@
     }
     #submit-status.success { color: #16a34a; }
     #submit-status.error { color: var(--danger); }
+
+    #submit-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(24, 24, 27, 0.92);
+      color: #fff;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      z-index: 1000;
+      text-align: center;
+      font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    }
+    #submit-overlay.visible { display: flex; }
+    #submit-overlay .checkmark {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: #16a34a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #submit-overlay .checkmark svg { width: 32px; height: 32px; }
+    #submit-overlay .headline { font-size: 18px; font-weight: 700; }
+    #submit-overlay .taskid { font-size: 13px; color: #a1a1aa; font-family: monospace; }
+    #submit-overlay .sub { font-size: 13px; color: #d4d4d8; max-width: 320px; }
   </style>
 </head>
 <body>
@@ -226,33 +315,40 @@
       <img id="screenshot-source" alt="" />
       <canvas id="annotation-canvas" class="tool-pen"></canvas>
       <div id="toolbar">
-        <button data-tool="pen" title="펜 (P)">
+        <button data-tool="pen" title="Pen (P)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
         </button>
-        <button data-tool="arrow" title="화살표 (A)">
+        <button data-tool="arrow" title="Arrow (A)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5"/><path d="M9 5h10v10"/></svg>
         </button>
-        <button data-tool="rectangle" title="사각형 (R)">
+        <button data-tool="line" title="Line (L)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 19 19 5"/></svg>
+        </button>
+        <button data-tool="rectangle" title="Rectangle (R)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/></svg>
         </button>
-        <button data-tool="ellipse" title="원 (O)">
+        <button data-tool="ellipse" title="Ellipse (O)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg>
         </button>
-        <button data-tool="text" title="텍스트 (T)">
+        <button data-tool="text" title="Text area (T)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14"/><path d="M12 6v14"/><path d="M9 20h6"/></svg>
         </button>
-        <button data-tool="mask" title="가리기 (M)">
+        <button data-tool="mask" title="Mask (M)">
           <svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="5" width="16" height="14" rx="2"/></svg>
         </button>
         <div class="divider"></div>
-        <button data-tool="erase" title="지우개 (E)">
+        <button data-tool="patch" title="Cut and move (C) — drag a source, then drag its destination">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1" stroke-dasharray="2 1.5"/><rect x="13" y="13" width="8" height="8" rx="1"/><path d="M11 11l2 2"/></svg>
+        </button>
+        <div class="divider"></div>
+        <button data-tool="erase" title="Eraser (E)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H8.5L4 15.5a1.5 1.5 0 0 1 0-2.1l9-9a1.5 1.5 0 0 1 2.1 0l4.9 4.9a1.5 1.5 0 0 1 0 2.1L13.5 18"/><path d="M14.5 6.5 18 10"/></svg>
         </button>
         <div class="divider"></div>
-        <button id="undo-button" title="되돌리기 (Ctrl+Z)">
+        <button id="undo-button" title="Undo (Ctrl+Z)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h11a5 5 0 0 1 0 10H8"/><path d="M8 5 3 10l5 5"/></svg>
         </button>
-        <button id="redo-button" title="다시 실행 (Ctrl+Shift+Z)">
+        <button id="redo-button" title="Redo (Ctrl+Shift+Z)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10H10a5 5 0 0 0 0 10h7"/><path d="M16 5l5 5-5 5"/></svg>
         </button>
       </div>
@@ -260,18 +356,30 @@
     </div>
     <div id="sidebar">
       <div id="sidebar-scroll">
-        <div class="section-label">지시 그룹</div>
-        <button id="new-instruction">+ 새 지시</button>
+        <div class="language-switch" aria-label="Language">
+          <button type="button" data-locale="en" class="active">English</button>
+          <button type="button" data-locale="ko">한국어</button>
+        </div>
+        <div class="section-label" id="groups-label">Instruction groups</div>
+        <button id="new-instruction">+ New instruction</button>
         <div id="group-cards"></div>
 
-        <div class="section-label">전체 설명 (선택)</div>
-        <textarea id="global-note" placeholder="전체적으로 하고 싶은 말..."></textarea>
+        <div class="section-label" id="global-note-label">Global note (optional)</div>
+        <textarea id="global-note" placeholder="Describe the overall change..."></textarea>
       </div>
       <div id="sidebar-footer">
-        <button id="submit-button">지시 제출</button>
+        <button id="submit-button">Submit instructions</button>
         <div id="submit-status"></div>
       </div>
     </div>
+  </div>
+  <div id="submit-overlay">
+    <div class="checkmark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    </div>
+    <div class="headline" id="submit-overlay-headline">Submitted</div>
+    <div class="taskid" id="submit-overlay-taskid"></div>
+    <div class="sub" id="submit-overlay-sub">The agent is reviewing your instructions. This tab will close shortly.</div>
   </div>
   <script src="/session.bundle.js"></script>
   <script>
@@ -281,6 +389,70 @@
     const pathParts = window.location.pathname.split('/').filter(Boolean);
     const sessionId = pathParts[pathParts.length - 1];
     const token = params.get('token');
+    const COPY = {
+      en: {
+        title: 'Redpen — Annotate the screen',
+        groups: 'Instruction groups',
+        newInstruction: '+ New instruction',
+        globalNote: 'Global note (optional)',
+        globalPlaceholder: 'Describe the overall change...',
+        submit: 'Submit instructions',
+        submitted: 'Submitted',
+        submittedSub: 'The agent is reviewing your instructions. This tab will close shortly.',
+        submittingDone: 'Submitted',
+        cleanupWarning: 'staging reference cleanup needs retry',
+        error: 'Error',
+        marks: (count) => `${count} mark${count === 1 ? '' : 's'}`,
+        groupPlaceholder: 'Description (optional)',
+        referenceEmpty: 'Paste an image or drop it here',
+        referenceAlt: 'Attached reference',
+        removeReference: 'Remove reference',
+        referenceLimit: 'Each instruction group can have up to three reference images.',
+        uploadFailed: (count) => `${count} image${count === 1 ? '' : 's'} could not be attached.`,
+        attachedLimit: 'Only the first three images were attached.',
+        emptyWarning: 'Draw at least one mark for this group',
+        tools: {
+          pen: 'Pen (P)', arrow: 'Arrow (A)', line: 'Line (L)', rectangle: 'Rectangle (R)',
+          ellipse: 'Ellipse (O)', text: 'Text area (T)', mask: 'Mask (M)',
+          patch: 'Cut and move (C) — drag a source, then drag its destination',
+          erase: 'Eraser (E)',
+        },
+        undo: 'Undo (Ctrl+Z)',
+        redo: 'Redo (Ctrl+Shift+Z)',
+      },
+      ko: {
+        title: 'Redpen — 화면에 지시 그리기',
+        groups: '지시 그룹',
+        newInstruction: '+ 새 지시',
+        globalNote: '전체 설명 (선택)',
+        globalPlaceholder: '전체적으로 하고 싶은 말...',
+        submit: '지시 제출',
+        submitted: '제출 완료',
+        submittedSub: '에이전트가 지시를 확인하고 있습니다. 이 탭은 잠시 후 자동으로 닫힙니다.',
+        submittingDone: '제출 완료',
+        cleanupWarning: '임시 레퍼런스 정리 재시도 필요',
+        error: '오류',
+        marks: (count) => `${count}개 표시`,
+        groupPlaceholder: '설명 (선택)',
+        referenceEmpty: '이미지를 붙여넣거나 여기에 드롭',
+        referenceAlt: '첨부 레퍼런스',
+        removeReference: '레퍼런스 제거',
+        referenceLimit: '각 지시 그룹에는 레퍼런스 이미지를 최대 3개까지 첨부할 수 있습니다.',
+        uploadFailed: (count) => `${count}개 이미지를 첨부하지 못했습니다.`,
+        attachedLimit: '최대 3장까지만 첨부했습니다.',
+        emptyWarning: '아직 아무것도 그리지 않았어요',
+        tools: {
+          pen: '펜 (P)', arrow: '화살표 (A)', line: '직선 (L)', rectangle: '사각형 (R)',
+          ellipse: '원 (O)', text: '텍스트 영역 (T)', mask: '가리기 (M)',
+          patch: '잘라서 옮기기 (C) — 드래그로 영역 선택 후 다시 드래그로 이동',
+          erase: '지우개 (E)',
+        },
+        undo: '되돌리기 (Ctrl+Z)',
+        redo: '다시 실행 (Ctrl+Shift+Z)',
+      },
+    };
+    let locale = localStorage.getItem('redpen-locale') === 'ko' ? 'ko' : 'en';
+    const tr = (key) => COPY[locale][key];
 
     const canvas = document.getElementById('annotation-canvas');
     const img = document.getElementById('screenshot-source');
@@ -288,7 +460,29 @@
 
     let app;
 
-    const TOOL_KEYS = { p: 'pen', a: 'arrow', r: 'rectangle', o: 'ellipse', t: 'text', m: 'mask', e: 'erase' };
+    function applyLocale() {
+      document.documentElement.lang = locale;
+      document.title = tr('title');
+      document.getElementById('groups-label').textContent = tr('groups');
+      document.getElementById('new-instruction').textContent = tr('newInstruction');
+      document.getElementById('global-note-label').textContent = tr('globalNote');
+      document.getElementById('global-note').placeholder = tr('globalPlaceholder');
+      document.getElementById('submit-button').textContent = tr('submit');
+      document.getElementById('submit-overlay-headline').textContent = tr('submitted');
+      document.getElementById('submit-overlay-sub').textContent = tr('submittedSub');
+      document.getElementById('undo-button').title = tr('undo');
+      document.getElementById('redo-button').title = tr('redo');
+      for (const button of document.querySelectorAll('[data-locale]')) {
+        button.classList.toggle('active', button.dataset.locale === locale);
+      }
+      for (const button of document.querySelectorAll('#toolbar [data-tool]')) {
+        button.title = COPY[locale].tools[button.dataset.tool];
+      }
+      app?.setLocale(locale);
+      if (app?.state) renderSidebar();
+    }
+
+    const TOOL_KEYS = { p: 'pen', a: 'arrow', l: 'line', r: 'rectangle', o: 'ellipse', t: 'text', m: 'mask', e: 'erase', c: 'patch' };
 
     function resizeCanvas() {
       const area = document.getElementById('canvas-area');
@@ -298,6 +492,9 @@
     }
 
     function selectTool(tool) {
+      if (app.tool === 'patch' && tool !== 'patch' && app.isAwaitingPatchDestination()) {
+        app.cancelPendingPatch();
+      }
       app.setTool(tool);
       canvas.className = `tool-${tool}`;
       for (const b of document.querySelectorAll('#toolbar button[data-tool]')) {
@@ -310,7 +507,7 @@
     }
 
     async function boot() {
-      app = new window.RedpenSession.SessionAnnotatorApp({ canvas, screenshotImage: img, sessionId, token });
+      app = new window.RedpenSession.SessionAnnotatorApp({ canvas, screenshotImage: img, sessionId, token, locale });
       const baseRender = app.render.bind(app);
       app.render = () => {
         baseRender();
@@ -328,6 +525,13 @@
       });
       document.getElementById('undo-button').addEventListener('click', () => app.undo());
       document.getElementById('redo-button').addEventListener('click', () => app.redo());
+      for (const button of document.querySelectorAll('[data-locale]')) {
+        button.addEventListener('click', () => {
+          locale = button.dataset.locale;
+          localStorage.setItem('redpen-locale', locale);
+          applyLocale();
+        });
+      }
       document.getElementById('submit-button').addEventListener('click', async () => {
         const status = document.getElementById('submit-status');
         status.className = '';
@@ -335,10 +539,13 @@
           const globalNoteValue = document.getElementById('global-note').value;
           await app.setGlobalNote(globalNoteValue);
           const result = await app.submit();
-          status.textContent = `제출 완료 — ${result.taskId}`;
-          status.className = 'success';
+          status.textContent = result.cleanupWarnings?.length
+            ? `${tr('submittingDone')} — ${result.taskId} (${tr('cleanupWarning')}: ${result.cleanupWarnings.length})`
+            : `${tr('submittingDone')} — ${result.taskId}`;
+          status.className = result.cleanupWarnings?.length ? 'error' : 'success';
+          showSubmitOverlayAndClose(result.taskId);
         } catch (err) {
-          status.textContent = `오류: ${err.message}`;
+          status.textContent = `${tr('error')}: ${err.message}`;
           status.className = 'error';
         }
       });
@@ -357,6 +564,7 @@
 
       window.__redpenSessionApp = app;
       window.__redpenRenderSidebar = renderSidebar;
+      applyLocale();
     }
 
     function renderSidebar() {
@@ -383,13 +591,13 @@
 
         const count = document.createElement('span');
         count.className = 'count';
-        count.textContent = `${group.markIds.length}개 표시`;
+        count.textContent = tr('marks')(group.markIds.length);
         head.appendChild(count);
 
         card.appendChild(head);
 
         const textarea = document.createElement('textarea');
-        textarea.placeholder = '설명 (선택)';
+        textarea.placeholder = tr('groupPlaceholder');
         textarea.value = group.note ?? '';
         textarea.addEventListener('click', (e) => e.stopPropagation());
         textarea.addEventListener('change', async () => {
@@ -397,10 +605,87 @@
         });
         card.appendChild(textarea);
 
+        const referenceZone = document.createElement('div');
+        referenceZone.className = 'reference-zone';
+        referenceZone.addEventListener('click', (event) => event.stopPropagation());
+        const referenceIds = group.referenceIds;
+        if (referenceIds.length === 0) {
+          const empty = document.createElement('span');
+          empty.className = 'reference-empty';
+          empty.textContent = tr('referenceEmpty');
+          referenceZone.appendChild(empty);
+        }
+        for (const referenceId of referenceIds) {
+          const thumb = document.createElement('div');
+          thumb.className = 'reference-thumb';
+          const image = document.createElement('img');
+          image.alt = tr('referenceAlt');
+          app.getReferenceImageBlob(referenceId).then((blob) => {
+            if (!image.isConnected) return;
+            const url = URL.createObjectURL(blob);
+            image.src = url;
+            image.addEventListener('load', () => URL.revokeObjectURL(url), { once: true });
+          }).catch(() => {});
+          thumb.appendChild(image);
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.title = tr('removeReference');
+          remove.textContent = '×';
+          remove.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            await app.removeGroupReference(group.id, referenceId);
+          });
+          thumb.appendChild(remove);
+          referenceZone.appendChild(thumb);
+        }
+        const capacity = document.createElement('span');
+        capacity.className = 'reference-capacity';
+        capacity.textContent = `${referenceIds.length}/3`;
+        referenceZone.appendChild(capacity);
+        card.appendChild(referenceZone);
+
+        const attachDroppedImage = async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          referenceZone.classList.remove('drag-over');
+          const files = Array.from(event.dataTransfer.files).filter((candidate) => candidate.type.startsWith('image/'));
+          if (files.length === 0) return;
+          const availableSlots = 3 - referenceIds.length;
+          if (availableSlots <= 0) {
+            document.getElementById('submit-status').textContent = tr('referenceLimit');
+            document.getElementById('submit-status').className = 'error';
+            return;
+          }
+          let failedUploads = 0;
+          for (const file of files.slice(0, availableSlots)) {
+            try {
+              await app.addGroupReference(group.id, file);
+            } catch {
+              failedUploads++;
+            }
+          }
+          if (files.length > availableSlots || failedUploads > 0) {
+            document.getElementById('submit-status').textContent =
+              failedUploads > 0
+                ? tr('uploadFailed')(failedUploads)
+                : tr('attachedLimit');
+            document.getElementById('submit-status').className = 'error';
+          }
+        };
+        card.addEventListener('dragover', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          referenceZone.classList.add('drag-over');
+        });
+        card.addEventListener('dragleave', (event) => {
+          if (!card.contains(event.relatedTarget)) referenceZone.classList.remove('drag-over');
+        });
+        card.addEventListener('drop', attachDroppedImage);
+
         if (group.markIds.length === 0) {
           const warning = document.createElement('div');
           warning.className = 'empty-warning';
-          warning.textContent = '아직 아무것도 그리지 않았어요';
+          warning.textContent = tr('emptyWarning');
           card.appendChild(warning);
         }
 
@@ -417,6 +702,26 @@
 
     window.addEventListener('resize', resizeCanvas);
 
+    // Submitting used to leave the annotation tab sitting open with only a
+    // small sidebar-footer line of text as feedback \u2014 easy to miss, and the
+    // tab itself never told the user (or the agent watching the target
+    // page) that the task was actually done. This makes success loud
+    // \u2014 full-screen confirmation with the real task id \u2014 and then closes
+    // the tab automatically so the user lands back on the page they were
+    // annotating instead of a dead annotation UI.
+    function showSubmitOverlayAndClose(taskId) {
+      const overlay = document.getElementById('submit-overlay');
+      document.getElementById('submit-overlay-taskid').textContent = taskId;
+      overlay.classList.add('visible');
+      setTimeout(() => {
+        window.close();
+        // window.close() is a no-op for tabs not opened by script in some
+        // browsers/policies; if we're still here after a beat, fall back to
+        // leaving the overlay up rather than silently doing nothing forever.
+      }, 1600);
+    }
+
+    applyLocale();
     if (img.complete) {
       boot();
     } else {

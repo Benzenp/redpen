@@ -230,3 +230,30 @@ test('DOM mutation before/after capture: grounding reflects the DOM state at cap
     await page.close();
   }
 });
+
+test('open modal excludes visually blocked background elements from grounding candidates', async () => {
+  const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  try {
+    await page.setContent(`
+      <button data-testid="background-action" style="position:fixed;left:300px;top:260px;width:200px;height:50px">Background</button>
+      <dialog data-testid="active-dialog">
+        <label for="modal-input">Modal input</label>
+        <input id="modal-input" data-testid="modal-input" />
+      </dialog>
+      <script>document.querySelector('dialog').showModal()</script>
+    `);
+    const index = await collectDomIndex(page);
+    assert.equal(index.candidates.some((candidate) => candidate.testIdHint === 'modal-input'), true);
+    assert.equal(index.candidates.some((candidate) => candidate.testIdHint === 'background-action'), false);
+
+    const inputRect = await page.locator('[data-testid="modal-input"]').evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    });
+    const targets = await captureAndGround(page, FRAME, [rectMark('mrk_modal', inputRect)]);
+    assert.equal(targets[0]?.attributes['data-testid'], 'modal-input');
+    assert.equal(targets.some((target) => target.attributes['data-testid'] === 'background-action'), false);
+  } finally {
+    await page.close();
+  }
+});

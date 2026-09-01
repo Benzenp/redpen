@@ -10,6 +10,7 @@ export class UnsupportedUrlError extends Error {
 }
 
 const ALLOWED_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
 
 export function assertLoopbackUrl(rawUrl: string): URL {
   let parsed: URL;
@@ -18,7 +19,12 @@ export function assertLoopbackUrl(rawUrl: string): URL {
   } catch {
     throw new UnsupportedUrlError(rawUrl);
   }
-  if (!ALLOWED_HOSTS.has(parsed.hostname)) {
+  if (
+    !ALLOWED_PROTOCOLS.has(parsed.protocol) ||
+    !ALLOWED_HOSTS.has(parsed.hostname) ||
+    parsed.username !== '' ||
+    parsed.password !== ''
+  ) {
     throw new UnsupportedUrlError(rawUrl);
   }
   return parsed;

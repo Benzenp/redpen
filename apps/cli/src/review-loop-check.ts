@@ -45,9 +45,11 @@ function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<{ stdout: strin
   });
 }
 
-function startStaticServer(fixtureFile: string): Promise<{ url: string; close: () => Promise<void> }> {
+function startStaticServer(fixtureFile: string): Promise<{ url: string; requestCount: () => number; close: () => Promise<void> }> {
   return new Promise((resolve) => {
+    let requests = 0;
     const server = createServer(async (req, res) => {
+      requests++;
       try {
         await stat(fixtureFile);
       } catch {
@@ -60,7 +62,11 @@ function startStaticServer(fixtureFile: string): Promise<{ url: string; close: (
     server.listen(0, '127.0.0.1', () => {
       const address = server.address();
       const port = typeof address === 'object' && address ? address.port : 0;
-      resolve({ url: `http://127.0.0.1:${port}/`, close: () => new Promise((r) => server.close(() => r())) });
+      resolve({
+        url: `http://127.0.0.1:${port}/`,
+        requestCount: () => requests,
+        close: () => new Promise((r) => server.close(() => r())),
+      });
     });
   });
 }
@@ -119,9 +125,15 @@ async function main() {
     await runCli(['claim', sessionId, '--json'], env);
 
     // --- review-ready: working -> review ---
+    const requestsBeforeReview = server.requestCount();
     const reviewResult = await runCli(['review', sessionId, '--json'], env);
     const reviewJson = JSON.parse(reviewResult.stdout.trim());
     record('review-transitions-from-working', reviewJson.session.state === 'review', `state=${reviewJson.session.state}`);
+    record(
+      'review-reloads-the-existing-target-page',
+      server.requestCount() > requestsBeforeReview,
+      `before=${requestsBeforeReview} after=${server.requestCount()}`,
+    );
 
     // --- annotate a revision: freeze again from `review` state ---
     const freezeRevisionResult = await runCli(['freeze', sessionId, '--json'], env);

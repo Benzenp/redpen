@@ -70,6 +70,7 @@ test('capture -> annotate -> ground -> assemble -> atomic bundle write -> read b
         capturedAt: new Date().toISOString(),
       },
       groups: store.getGroups(),
+      references: [],
       marks: store.getMarks(),
       targets,
       globalNote: 'fix these two things',

@@ -116,11 +116,43 @@ async function main() {
     // bundle / canvas-rendering / submit wiring end-to-end regardless.
     const pwBrowser = await chromium.launch({ headless: true });
     const page = await pwBrowser.newPage({ viewport: { width: 1280, height: 900 } });
-    const annotatorUrl = `http://127.0.0.1:${discovery.port}/annotator/${sessionId}?token=${discovery.token}`;
+    await page.setExtraHTTPHeaders({ Authorization: `Bearer ${discovery.token}` });
+    const annotatorUrl = `http://127.0.0.1:${discovery.port}/annotator/${sessionId}`;
     await page.goto(annotatorUrl, { waitUntil: 'load' });
     await page.waitForFunction(() => Boolean((window as unknown as { __redpenSessionApp?: unknown }).__redpenSessionApp));
 
     record('annotator-page-loads-and-boots', true, annotatorUrl);
+    const defaultLocale = await page.evaluate(() => ({
+      lang: document.documentElement.lang,
+      submit: document.getElementById('submit-button')?.textContent,
+      lineTitle: document.querySelector('[data-tool="line"]')?.getAttribute('title'),
+    }));
+    record(
+      'annotator-default-language-is-english',
+      defaultLocale.lang === 'en' &&
+        defaultLocale.submit === 'Submit instructions' &&
+        defaultLocale.lineTitle === 'Line (L)',
+      JSON.stringify(defaultLocale),
+    );
+    await page.click('[data-locale="ko"]');
+    const koreanLocale = await page.evaluate(() => ({
+      lang: document.documentElement.lang,
+      submit: document.getElementById('submit-button')?.textContent,
+      lineTitle: document.querySelector('[data-tool="line"]')?.getAttribute('title'),
+    }));
+    record(
+      'language-switch-translates-the-annotator-to-korean',
+      koreanLocale.lang === 'ko' && koreanLocale.submit === '지시 제출' && koreanLocale.lineTitle === '직선 (L)',
+      JSON.stringify(koreanLocale),
+    );
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(() => Boolean((window as unknown as { __redpenSessionApp?: unknown }).__redpenSessionApp));
+    record(
+      'selected-language-persists-across-reload',
+      await page.evaluate(() => document.documentElement.lang === 'ko' && localStorage.getItem('redpen-locale') === 'ko'),
+      'locale=ko',
+    );
+    await page.click('[data-locale="en"]');
 
     // --- draw a rectangle via real pointer events ---
     const canvas = page.locator('#annotation-canvas');
@@ -141,6 +173,32 @@ async function main() {
       () => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length,
     );
     record('pointer-drag-creates-a-rectangle-mark-via-real-api-roundtrip', markCountAfterDraw === 1, `marks=${markCountAfterDraw}`);
+    const rectangleCoordinates = await page.evaluate(() => {
+      const app = (window as unknown as {
+        __redpenSessionApp: {
+          state: {
+            viewport: { width: number; height: number };
+            marks: Array<{
+              type: string;
+              bounds: { x: number; y: number; width: number; height: number };
+              normalizedBounds: { x: number; y: number; width: number; height: number };
+            }>;
+          };
+        };
+      }).__redpenSessionApp;
+      const mark = app.state.marks.find((candidate) => candidate.type === 'rectangle')!;
+      return { mark, viewport: app.state.viewport };
+    });
+    const expectedNormalizedX = rectangleCoordinates.mark.bounds.x / rectangleCoordinates.viewport.width;
+    const expectedNormalizedY = rectangleCoordinates.mark.bounds.y / rectangleCoordinates.viewport.height;
+    record(
+      'selection-bounds-use-real-normalized-coordinates',
+      Math.abs(rectangleCoordinates.mark.normalizedBounds.x - expectedNormalizedX) < 1e-9 &&
+        Math.abs(rectangleCoordinates.mark.normalizedBounds.y - expectedNormalizedY) < 1e-9 &&
+        rectangleCoordinates.mark.normalizedBounds.width <= 1 &&
+        rectangleCoordinates.mark.normalizedBounds.height <= 1,
+      `bounds=${JSON.stringify(rectangleCoordinates.mark.bounds)} normalized=${JSON.stringify(rectangleCoordinates.mark.normalizedBounds)}`,
+    );
 
     // --- pan (shift+drag) and zoom (wheel) actually change the transform ---
     const scaleBefore = await page.evaluate(() => (window as unknown as { __redpenSessionApp: { scale: number } }).__redpenSessionApp.scale);
@@ -219,6 +277,162 @@ async function main() {
     await page.mouse.up();
     await page.waitForTimeout(200);
 
+    // --- arrow tool renders a real filled arrowhead, not only a line ---
+    await page.click('#toolbar button[data-tool="arrow"]');
+    await page.mouse.move(box.x + 620, box.y + 250);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 760, box.y + 250, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+    const arrowRendering = await page.evaluate(() => {
+      const app = (window as unknown as {
+        __redpenSessionApp: {
+          scale: number;
+          panX: number;
+          panY: number;
+          state: {
+            groups: Array<{ id: string; color: string }>;
+            marks: Array<{ type: string; groupId: string; to?: { x: number; y: number } }>;
+          };
+        };
+      }).__redpenSessionApp;
+      const arrow = [...app.state.marks].reverse().find((mark) => mark.type === 'arrow');
+      if (!arrow?.to) return { hasArrow: false, offAxisColorPixels: 0 };
+      const color = app.state.groups.find((group) => group.id === arrow.groupId)?.color ?? '#000000';
+      const red = Number.parseInt(color.slice(1, 3), 16);
+      const green = Number.parseInt(color.slice(3, 5), 16);
+      const blue = Number.parseInt(color.slice(5, 7), 16);
+      const endpoint = {
+        x: arrow.to.x * app.scale + app.panX,
+        y: arrow.to.y * app.scale + app.panY,
+      };
+      const canvas = document.getElementById('annotation-canvas') as HTMLCanvasElement;
+      const context = canvas.getContext('2d')!;
+      const left = Math.max(0, Math.floor(endpoint.x - 15));
+      const top = Math.max(0, Math.floor(endpoint.y - 10));
+      const width = Math.min(16, canvas.width - left);
+      const height = Math.min(21, canvas.height - top);
+      const pixels = context.getImageData(left, top, width, height).data;
+      let offAxisColorPixels = 0;
+      for (let y = 0; y < height; y++) {
+        if (Math.abs(top + y - endpoint.y) < 2) continue;
+        for (let x = 0; x < width; x++) {
+          const index = (y * width + x) * 4;
+          const distance =
+            Math.abs(pixels[index] - red) +
+            Math.abs(pixels[index + 1] - green) +
+            Math.abs(pixels[index + 2] - blue);
+          if (distance < 90) offAxisColorPixels++;
+        }
+      }
+      return { hasArrow: true, offAxisColorPixels };
+    });
+    record(
+      'arrow-tool-renders-a-visible-arrowhead',
+      arrowRendering.hasArrow && arrowRendering.offAxisColorPixels >= 6,
+      `offAxisColorPixels=${arrowRendering.offAxisColorPixels}`,
+    );
+
+    // --- straight line is distinct from an arrow and has no head ---
+    await page.click('#toolbar button[data-tool="line"]');
+    await page.mouse.move(box.x + 620, box.y + 180);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 760, box.y + 240, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+    const lineMarkCount = await page.evaluate(
+      () => (window as unknown as {
+        __redpenSessionApp: { state: { marks: Array<{ type: string }> } };
+      }).__redpenSessionApp.state.marks.filter((mark) => mark.type === 'line').length,
+    );
+    record('line-tool-commits-a-straight-line-mark', lineMarkCount === 1, `lineMarks=${lineMarkCount}`);
+    await page.click('#toolbar button[data-tool="erase"]');
+    await page.mouse.click(box.x + 630, box.y + 235);
+    await page.waitForTimeout(100);
+    const lineCountAfterFarErase = await page.evaluate(
+      () => (window as unknown as {
+        __redpenSessionApp: { state: { marks: Array<{ type: string }> } };
+      }).__redpenSessionApp.state.marks.filter((mark) => mark.type === 'line').length,
+    );
+    await page.mouse.click(box.x + 690, box.y + 210);
+    await page.waitForTimeout(100);
+    const lineCountAfterStrokeErase = await page.evaluate(
+      () => (window as unknown as {
+        __redpenSessionApp: { state: { marks: Array<{ type: string }> } };
+      }).__redpenSessionApp.state.marks.filter((mark) => mark.type === 'line').length,
+    );
+    record(
+      'eraser-hits-line-stroke-not-its-empty-bounding-box',
+      lineCountAfterFarErase === 1 && lineCountAfterStrokeErase === 0,
+      `far=${lineCountAfterFarErase} stroke=${lineCountAfterStrokeErase}`,
+    );
+    await page.click('#toolbar button[data-tool="line"]');
+    await page.mouse.move(box.x + 620, box.y + 180);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 760, box.y + 240, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(100);
+    await page.mouse.move(box.x + 5, box.y + 100);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 20, box.y + 120);
+    await page.mouse.up();
+    await page.waitForTimeout(100);
+    const lineCountAfterBlankGesture = await page.evaluate(
+      () => (window as unknown as {
+        __redpenSessionApp: { state: { marks: Array<{ type: string }> } };
+      }).__redpenSessionApp.state.marks.filter((mark) => mark.type === 'line').length,
+    );
+    record(
+      'drawing-in-panned-blank-canvas-does-not-create-an-edge-line',
+      lineCountAfterBlankGesture === 1,
+      `lineMarks=${lineCountAfterBlankGesture}`,
+    );
+
+    // --- text tool creates a bounded editor and commits group-colored text ---
+    await page.click('#toolbar button[data-tool="text"]');
+    await page.mouse.move(box.x + 600, box.y + 300);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 800, box.y + 370, { steps: 5 });
+    await page.mouse.up();
+    const textEditor = page.locator('.canvas-text-editor');
+    await textEditor.waitFor({ state: 'visible' });
+    const editorColor = await textEditor.evaluate((element) => getComputedStyle(element).color);
+    const markCountBeforeNativeUndo = await page.evaluate(
+      () => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length,
+    );
+    await textEditor.type('임시');
+    await textEditor.press('Control+z');
+    const markCountAfterNativeUndo = await page.evaluate(
+      () => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length,
+    );
+    await textEditor.fill('영역 안에 입력한 텍스트');
+    await textEditor.press('Control+Enter');
+    await page.waitForTimeout(200);
+    const textMarkState = await page.evaluate(() => {
+      const app = (window as unknown as {
+        __redpenSessionApp: {
+          state: {
+            activeGroupId: string;
+            groups: Array<{ id: string; color: string }>;
+            marks: Array<{ type: string; text?: string; groupId: string; bounds: { width: number; height: number } }>;
+          };
+        };
+      }).__redpenSessionApp;
+      const mark = [...app.state.marks].reverse().find((candidate) => candidate.type === 'text');
+      const color = app.state.groups.find((group) => group.id === mark?.groupId)?.color;
+      return { mark, color };
+    });
+    record(
+      'text-tool-commits-bounded-group-colored-text',
+      textMarkState.mark?.text === '영역 안에 입력한 텍스트' &&
+        textMarkState.mark.bounds.width > 100 &&
+        textMarkState.mark.bounds.height > 30 &&
+        markCountAfterNativeUndo === markCountBeforeNativeUndo &&
+        editorColor === 'rgb(220, 38, 38)' &&
+        textMarkState.color === '#dc2626',
+      `editorColor=${editorColor} mark=${JSON.stringify(textMarkState.mark)}`,
+    );
+
     // --- create a second instruction group via the real sidebar button ---
     await page.click('#new-instruction');
     await page.waitForTimeout(150);
@@ -241,9 +455,9 @@ async function main() {
     // --- type a global note through the real textarea, then submit ---
     await page.fill('#global-note', '실제 UI로 작성한 전체 노트');
     await page.click('#submit-button');
-    await page.waitForSelector('#submit-status:has-text("제출 완료")', { timeout: 5000 });
+    await page.waitForSelector('#submit-status:has-text("Submitted")', { timeout: 5000 });
     const submitStatusText = await page.textContent('#submit-status');
-    record('real-ui-submit-button-completes-and-shows-task-id', /제출 완료.*rpt_/.test(submitStatusText ?? ''), submitStatusText ?? '');
+    record('real-ui-submit-button-completes-and-shows-task-id', /Submitted.*rpt_/.test(submitStatusText ?? ''), submitStatusText ?? '');
 
     const taskIdMatch = /(rpt_\w+)/.exec(submitStatusText ?? '');
     const taskId = taskIdMatch?.[1];
@@ -260,9 +474,24 @@ async function main() {
         `globalNote=${taskJson.task?.globalNote}`,
       );
       record('submitted-task-has-two-groups-matching-the-ui-state', taskJson.task?.groups?.length === 2, `groups=${taskJson.task?.groups?.length}`);
+      const overlaySvg = await readFile(
+        path.join(workspaceRoot, '.redpen', 'tasks', taskId, 'frames', 'frame-001', 'overlay.svg'),
+        'utf8',
+      );
+      const lineMarkId = taskJson.task?.marks?.find((mark: { type: string }) => mark.type === 'line')?.id;
+      record(
+        'overlay-preserves-bounded-text-and-headless-line',
+        overlaySvg.includes('<foreignObject') &&
+          overlaySvg.includes('영역 안에 입력한 텍스트') &&
+          Boolean(lineMarkId) &&
+          new RegExp(`<line[^>]+data-mark-id="${lineMarkId}"`).test(overlaySvg) &&
+          !new RegExp(`<line[^>]+data-mark-id="${lineMarkId}"[^>]+marker-end`).test(overlaySvg),
+        `lineMarkId=${lineMarkId} overlayBytes=${Buffer.byteLength(overlaySvg)}`,
+      );
     } else {
       record('submitted-task-carries-the-global-note-typed-in-the-real-textarea', false, 'no taskId captured');
       record('submitted-task-has-two-groups-matching-the-ui-state', false, 'no taskId captured');
+      record('overlay-preserves-bounded-text-and-headless-line', false, 'no taskId captured');
     }
 
     const allPass = checks.every((c) => c.pass);

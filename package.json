@@ -7,7 +7,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "spike:capture": "pnpm --filter @redpen/cli run spike:capture",
+    "build": "corepack pnpm --filter @redpen/annotator run build && corepack pnpm --filter @redpen/cli run build",
+    "spike:capture": "corepack pnpm --filter @redpen/cli run spike:capture",
     "demo": "node fixtures/demo-app/serve.mjs"
   }
 }

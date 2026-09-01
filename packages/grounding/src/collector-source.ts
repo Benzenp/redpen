@@ -32,6 +32,22 @@ export const COLLECTOR_SOURCE = `
 
   var candidates = [];
   var tempCounter = 0;
+  var activeModal = null;
+  var openDialogs = Array.prototype.slice.call(document.querySelectorAll('dialog[open]'));
+  for (var dialogIndex = openDialogs.length - 1; dialogIndex >= 0; dialogIndex--) {
+    try {
+      if (openDialogs[dialogIndex].matches(':modal')) {
+        activeModal = openDialogs[dialogIndex];
+        break;
+      }
+    } catch (_) {
+      activeModal = openDialogs[dialogIndex];
+      break;
+    }
+  }
+  if (!activeModal) {
+    activeModal = document.querySelector('[aria-modal="true"]');
+  }
 
   function isVisible(el) {
     var style = window.getComputedStyle(el);
@@ -78,7 +94,10 @@ export const COLLECTOR_SOURCE = `
     for (var i = 0; i < children.length; i++) {
       var child = children[i];
       if (SKIP_TAGS[child.tagName]) continue;
-      if (isVisible(child)) {
+      var insideActiveModal = !activeModal || child === activeModal || activeModal.contains(child);
+      var leadsToActiveModal = activeModal && child.contains(activeModal);
+      if (activeModal && !insideActiveModal && !leadsToActiveModal) continue;
+      if (insideActiveModal && isVisible(child)) {
         var rect = child.getBoundingClientRect();
         var testId =
           child.getAttribute('data-testid') ||

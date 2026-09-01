@@ -21,7 +21,11 @@ export interface AnnotatingCapture {
 interface SessionRuntimeEntry {
   page?: Page;
   capture?: AnnotatingCapture;
-  waiters: Array<(taskId: string) => void>;
+  submittedTaskId?: string;
+  waiters: Array<{
+    timer: ReturnType<typeof setTimeout> | null;
+    resolve: (taskId: string | null) => void;
+  }>;
 }
 
 export class SessionRuntime {
@@ -44,6 +48,7 @@ export class SessionRuntime {
     return this.entries.get(sessionId)?.page;
   }
 
+
   setCapture(sessionId: string, capture: AnnotatingCapture): void {
     this.entry(sessionId).capture = capture;
   }
@@ -57,30 +62,49 @@ export class SessionRuntime {
     if (entry) entry.capture = undefined;
   }
 
-  /** Resolves every pending `wait` call for this session with the submitted taskId. */
+  /** Latches the submitted taskId and resolves every pending wait for this session. */
   notifySubmitted(sessionId: string, taskId: string): void {
-    const entry = this.entries.get(sessionId);
-    if (!entry) return;
-    for (const waiter of entry.waiters) waiter(taskId);
+    const entry = this.entry(sessionId);
+    entry.submittedTaskId = taskId;
+    for (const waiter of entry.waiters) {
+      if (waiter.timer) clearTimeout(waiter.timer);
+      waiter.resolve(taskId);
+    }
     entry.waiters = [];
   }
 
   waitForSubmission(sessionId: string, timeoutMs: number): Promise<string | null> {
+    const entry = this.entry(sessionId);
+    if (entry.submittedTaskId !== undefined) {
+      return Promise.resolve(entry.submittedTaskId);
+    }
+
     return new Promise((resolve) => {
-      const entry = this.entry(sessionId);
+      const waiter = {
+        timer: null as ReturnType<typeof setTimeout> | null,
+        resolve,
+      };
       const timer = setTimeout(() => {
-        entry.waiters = entry.waiters.filter((w) => w !== onSubmit);
+        entry.waiters = entry.waiters.filter((current) => current !== waiter);
         resolve(null);
       }, timeoutMs);
-      function onSubmit(taskId: string) {
-        clearTimeout(timer);
-        resolve(taskId);
-      }
-      entry.waiters.push(onSubmit);
+      waiter.timer = timer;
+      entry.waiters.push(waiter);
     });
   }
 
   remove(sessionId: string): void {
+    const entry = this.entries.get(sessionId);
+    if (entry) {
+      for (const waiter of entry.waiters) {
+        if (waiter.timer) clearTimeout(waiter.timer);
+        waiter.resolve(null);
+      }
+    }
     this.entries.delete(sessionId);
+  }
+
+  clear(): void {
+    for (const sessionId of [...this.entries.keys()]) this.remove(sessionId);
   }
 }

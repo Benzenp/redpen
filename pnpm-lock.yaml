@@ -38,6 +38,22 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.6.0
         version: 1.30.0(zod@3.25.76)
+      pixelmatch:
+        specifier: ^5.3.0
+        version: 5.3.0
+      playwright:
+        specifier: ^1.48.0
+        version: 1.62.1
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
+      ulid:
+        specifier: ^2.3.0
+        version: 2.4.0
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
       '@redpen/annotator-core':
         specifier: workspace:*
         version: link:../../packages/annotator-core
@@ -50,16 +66,15 @@ importers:
       '@redpen/review':
         specifier: workspace:*
         version: link:../../packages/review
-      playwright:
-        specifier: ^1.48.0
-        version: 1.62.1
-      zod:
-        specifier: ^3.23.8
-        version: 3.25.76
-    devDependencies:
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.2
       tsx:
         specifier: ^4.19.0
         version: 4.23.13
@@ -72,10 +87,16 @@ importers:
       '@redpen/protocol':
         specifier: workspace:*
         version: link:../protocol
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
       tsx:
         specifier: ^4.19.0
         version: 4.23.13

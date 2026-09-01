@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import { createServer, type Server } from 'node:http';
+import { isProcessAlive } from './daemon/discovery.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -145,7 +146,8 @@ async function main() {
     const statusWhileHungJson = JSON.parse(statusWhileHung.stdout.trim());
     record('status-distinguishes-hung-from-not-running', statusWhileHungJson.health === 'hung', `health=${statusWhileHungJson.health}`);
 
-    // --- open should recover from the hung state by starting a fresh daemon ---
+    // A live PID that fails authenticated health may belong to an unrelated
+    // process. Recovery may replace stale discovery, but must not signal it.
     const server = createServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end('<html><body>fixture</body></html>');
@@ -159,13 +161,17 @@ async function main() {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'redpen-daemon-lifecycle-ws-'));
 
     const openAfterHang = await runCli(['open', `http://127.0.0.1:${fixturePort}/`, '--project', workspaceRoot, '--json'], env);
-    record('open-recovers-past-a-hung-daemon-record', openAfterHang.code === 0, `code=${openAfterHang.code} stderr=${openAfterHang.stderr.slice(0, 300)}`);
+    record(
+      'open-recovers-without-killing-an-unverified-live-pid',
+      openAfterHang.code === 0 && dummyProcess.pid !== undefined && isProcessAlive(dummyProcess.pid),
+      `code=${openAfterHang.code} dummyAlive=${dummyProcess.pid === undefined ? false : isProcessAlive(dummyProcess.pid)}`,
+    );
 
     const statusAfterRecovery = await runCli(['daemon', 'status', '--json'], env);
     const statusAfterRecoveryJson = JSON.parse(statusAfterRecovery.stdout.trim());
     record(
-      'status-reports-running-with-a-new-pid-after-recovery',
-      statusAfterRecoveryJson.health === 'running' && statusAfterRecoveryJson.discovery.pid !== process.pid,
+      'status-reports-a-new-authenticated-daemon-after-safe-recovery',
+      statusAfterRecoveryJson.health === 'running' && statusAfterRecoveryJson.discovery.pid !== dummyProcess.pid,
       `health=${statusAfterRecoveryJson.health} pid=${statusAfterRecoveryJson.discovery?.pid}`,
     );
 

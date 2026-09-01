@@ -51,6 +51,8 @@ export const domTargetRelationSchema = z.enum([
   'nearest',
   'arrow-source',
   'arrow-destination',
+  'line-start',
+  'line-end',
 ]);
 export type DomTargetRelation = z.infer<typeof domTargetRelationSchema>;
 
@@ -101,6 +103,10 @@ export const instructionGroupSchema = z.object({
   state: groupStateSchema,
   markIds: z.array(z.string().min(1)),
   targetIds: z.array(z.string().min(1)),
+  referenceIds: z.array(z.string().min(1)).max(3).refine(
+    (ids) => new Set(ids).size === ids.length,
+    { message: 'referenceIds must be unique' },
+  ),
 });
 export type InstructionGroup = z.infer<typeof instructionGroupSchema>;
 
@@ -123,6 +129,12 @@ export const arrowMarkSchema = markBaseSchema.extend({
   to: z.object({ x: z.number(), y: z.number() }),
 });
 
+export const lineMarkSchema = markBaseSchema.extend({
+  type: z.literal('line'),
+  from: z.object({ x: z.number(), y: z.number() }),
+  to: z.object({ x: z.number(), y: z.number() }),
+});
+
 export const rectangleMarkSchema = markBaseSchema.extend({
   type: z.literal('rectangle'),
 });
@@ -141,13 +153,20 @@ export const maskMarkSchema = markBaseSchema.extend({
   type: z.literal('mask'),
 });
 
+export const patchMarkSchema = markBaseSchema.extend({
+  type: z.literal('patch'),
+  sourceRect: rectSchema,
+});
+
 export const markSchema = z.discriminatedUnion('type', [
   freehandMarkSchema,
   arrowMarkSchema,
+  lineMarkSchema,
   rectangleMarkSchema,
   ellipseMarkSchema,
   textMarkSchema,
   maskMarkSchema,
+  patchMarkSchema,
 ]);
 export type Mark = z.infer<typeof markSchema>;
 export type MarkBase = z.infer<typeof markBaseSchema>;
@@ -195,6 +214,24 @@ export const domTargetSchema = z.object({
 });
 export type DomTarget = z.infer<typeof domTargetSchema>;
 
+export const referenceAssetSchema = z.object({
+  id: z.string().min(1),
+  fileName: z.string().min(1),
+  path: z.string().min(1),
+  width: z.number().positive(),
+  height: z.number().positive(),
+  createdAt: z.string().datetime(),
+  label: z.string().optional(),
+}).superRefine((reference, context) => {
+  if (reference.fileName !== `${reference.id}.png`) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['fileName'], message: 'reference fileName must match its id' });
+  }
+  if (reference.path !== `references/${reference.fileName}`) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['path'], message: 'reference path must stay inside task references/' });
+  }
+});
+export type ReferenceAsset = z.infer<typeof referenceAssetSchema>;
+
 export const visualTaskSchema = z.object({
   schemaVersion: z.literal(SCHEMA_VERSION),
   id: z.string().min(1),
@@ -215,7 +252,39 @@ export const visualTaskSchema = z.object({
   globalNote: z.string().optional(),
   frames: z.array(frameSchema),
   groups: z.array(instructionGroupSchema),
+  references: z.array(referenceAssetSchema),
   marks: z.array(markSchema),
   targets: z.array(domTargetSchema),
+}).superRefine((task, context) => {
+  const referenceIds = new Set<string>();
+  for (let index = 0; index < task.references.length; index++) {
+    const id = task.references[index].id;
+    if (referenceIds.has(id)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['references', index, 'id'], message: 'reference IDs must be unique' });
+    }
+    referenceIds.add(id);
+  }
+  const attachedIds = new Set<string>();
+  for (let groupIndex = 0; groupIndex < task.groups.length; groupIndex++) {
+    for (const id of task.groups[groupIndex].referenceIds) {
+      attachedIds.add(id);
+      if (!referenceIds.has(id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['groups', groupIndex, 'referenceIds'],
+          message: `attached reference is missing from task references: ${id}`,
+        });
+      }
+    }
+  }
+  for (let referenceIndex = 0; referenceIndex < task.references.length; referenceIndex++) {
+    if (!attachedIds.has(task.references[referenceIndex].id)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['references', referenceIndex, 'id'],
+        message: 'task reference must be attached to at least one group',
+      });
+    }
+  }
 });
 export type VisualTask = z.infer<typeof visualTaskSchema>;

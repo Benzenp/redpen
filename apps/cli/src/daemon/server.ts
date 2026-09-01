@@ -8,19 +8,33 @@
  *   and serialize the result. No business logic lives here.
  */
 import { createServer, type Server } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RedpenApplicationService } from '../application/service.js';
+import {
+  AnnotationGroupNotFoundError,
+  AnnotationSubmissionInProgressError,
+  GroupReferenceLimitError,
+  InvalidReferenceImageError,
+  ReferenceImageTooLargeError,
+  MissingAttachedReferenceError,
+} from '../application/service.js';
 import { SessionNotFoundError, TaskNotFoundError, NoActiveCaptureError } from '../application/errors.js';
 import { UnsupportedUrlError } from '../application/url-policy.js';
 import { InvalidSessionTransitionError } from '@redpen/protocol/state-machine';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// apps/cli/src/daemon -> apps/annotator/public. Resolved at runtime (not
-// bundled) since these are static assets the daemon reads off disk.
-const annotatorPublicDir = path.resolve(__dirname, '../../../annotator/public');
+const isBundledRuntime = path.basename(__dirname) === 'dist';
+const cliRoot = isBundledRuntime ? path.resolve(__dirname, '..') : path.resolve(__dirname, '../..');
+const bundledPublicDir = path.join(cliRoot, 'dist/public');
+// Source execution uses the annotator assets directly; the packaged bundle
+// serves the copied assets from dist/public.
+const annotatorPublicDir = isBundledRuntime && existsSync(bundledPublicDir)
+  ? bundledPublicDir
+  : path.resolve(cliRoot, '../annotator/public');
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -37,17 +51,52 @@ export interface StartedDaemon {
 }
 
 function errorToHttpStatus(err: unknown): number {
-  if (err instanceof SessionNotFoundError || err instanceof TaskNotFoundError) return 404;
-  if (err instanceof UnsupportedUrlError || err instanceof InvalidSessionTransitionError) return 400;
-  if (err instanceof NoActiveCaptureError) return 409;
+  if (err instanceof SessionNotFoundError || err instanceof TaskNotFoundError || err instanceof AnnotationGroupNotFoundError) return 404;
+  if (err instanceof UnsupportedUrlError || err instanceof InvalidSessionTransitionError || err instanceof InvalidJsonBodyError || err instanceof InvalidReferenceImageError || err instanceof MissingAttachedReferenceError) return 400;
+  if (err instanceof UnsupportedMediaTypeError) return 415;
+  if (err instanceof RequestBodyTooLargeError || err instanceof ReferenceImageTooLargeError) return 413;
+  if (err instanceof NoActiveCaptureError || err instanceof GroupReferenceLimitError || err instanceof AnnotationSubmissionInProgressError) return 409;
   return 500;
 }
 
-async function readJsonBody(req: import('node:http').IncomingMessage): Promise<unknown> {
+class InvalidJsonBodyError extends Error {
+  constructor() {
+    super('invalid JSON request body');
+  }
+}
+
+class UnsupportedMediaTypeError extends Error {
+  constructor() {
+    super('expected application/json');
+  }
+}
+
+class RequestBodyTooLargeError extends Error {
+  constructor() {
+    super('request body exceeds limit');
+  }
+}
+
+async function readJsonBody(req: import('node:http').IncomingMessage, maxBytes = 1024 * 1024): Promise<unknown> {
+  const contentType = req.headers['content-type'];
+  if (!contentType || !/^application\/json(?:\s*;|$)/i.test(contentType)) throw new UnsupportedMediaTypeError();
+  const contentLength = req.headers['content-length'];
+  if (contentLength && !/^\d+$/.test(contentLength)) throw new InvalidJsonBodyError();
+  if (contentLength && Number(contentLength) > maxBytes) throw new RequestBodyTooLargeError();
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+  let byteCount = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    byteCount += buffer.length;
+    if (byteCount > maxBytes) throw new RequestBodyTooLargeError();
+    chunks.push(buffer);
+  }
   if (chunks.length === 0) return {};
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    throw new InvalidJsonBodyError();
+  }
 }
 
 export async function startDaemon(port = 0): Promise<StartedDaemon> {
@@ -65,10 +114,13 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
       const parts = url.pathname.split('/').filter(Boolean);
 
       if (req.method === 'GET' && parts[0] === 'health') {
-        // No auth required: this is the liveness probe ensure-daemon.ts and
-        // probeDaemonHealth() use precisely to tell a live-but-wrong-token
-        // daemon apart from a genuinely dead one.
-        send(200, { ok: true });
+        const challenge = url.searchParams.get('challenge');
+        if (!challenge || challenge.length > 128) {
+          send(400, { error: 'invalid_challenge' });
+          return;
+        }
+        const proof = createHmac('sha256', token).update(challenge).digest('hex');
+        send(200, { ok: true, proof });
         return;
       }
 
@@ -79,30 +131,65 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
       // <script> tag's src). It never reveals anything session-specific.
       if (req.method === 'GET' && parts[0] === 'session.bundle.js') {
         const js = await readFile(path.join(annotatorPublicDir, 'session.bundle.js'));
-        res.writeHead(200, { 'Content-Type': STATIC_CONTENT_TYPES['.js'] });
+        res.writeHead(200, {
+          'Content-Type': STATIC_CONTENT_TYPES['.js'],
+          'Cache-Control': 'no-store',
+          'Referrer-Policy': 'no-referrer',
+        });
         res.end(js);
         return;
       }
 
-      // The annotation UI is opened as a real browser tab (docs/ARCHITECTURE.md
-      // \u00a74.2) which cannot attach an Authorization header to top-level
-      // navigation or <img> requests, so its session-specific routes accept
-      // the token as a query parameter instead. Every other route still
-      // requires the header.
-      const isBrowserTabRoute =
-        req.method === 'GET' &&
-        (parts[0] === 'annotator' || (parts[0] === 'api' && parts[1] === 'sessions' && parts[3] === 'annotator' && parts[4] === 'screenshot'));
+      const isOverlayFreezeRoute = req.method === 'POST' && parts[0] === 'sessions' && parts[1] !== undefined && parts[2] === 'freeze';
+      const isOverlayStatusRoute = req.method === 'GET' && parts[0] === 'sessions' && parts[1] !== undefined && !parts[2];
+      const isAnnotatorTabRoute = req.method === 'GET' && parts[0] === 'annotator' && parts[1] !== undefined && !parts[2];
+      const isAnnotatorApiRoute = parts[0] === 'api' && parts[1] === 'sessions' && parts[2] !== undefined && parts[3] === 'annotator';
+      const browserSessionId = isOverlayFreezeRoute || isOverlayStatusRoute
+        ? parts[1]
+        : isAnnotatorTabRoute
+          ? parts[1]
+          : isAnnotatorApiRoute
+            ? parts[2]
+            : undefined;
       const auth = req.headers.authorization ?? '';
       const queryToken = url.searchParams.get('token');
-      const authorized = isBrowserTabRoute ? queryToken === token : auth === `Bearer ${token}`;
+      const headerCapability = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : null;
+      const masterAuthorized = auth === `Bearer ${token}`;
+      const authorized = masterAuthorized || (browserSessionId
+        ? service.hasBrowserCapability(
+            browserSessionId,
+            isOverlayFreezeRoute || isOverlayStatusRoute ? 'overlay' : 'annotator',
+            queryToken ?? headerCapability,
+          )
+        : false);
+      if (browserSessionId) {
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Referrer-Policy', 'no-referrer');
+      }
+      if (isOverlayFreezeRoute || isOverlayStatusRoute) {
+        // Simple cross-origin GET/POST with no custom headers/body (no CORS
+        // preflight is sent for this shape), so only the response-readable
+        // header is needed, not full OPTIONS handling.
+        res.setHeader('Access-Control-Allow-Origin', '*');
+      }
       if (!authorized) {
         send(401, { error: 'unauthorized' });
         return;
       }
 
+      if (req.method === 'POST' && parts[0] === 'shutdown' && !parts[1]) {
+        send(202, { ok: true });
+        setImmediate(() => server.emit('redpenShutdownRequested'));
+        return;
+      }
+
       if (req.method === 'GET' && parts[0] === 'annotator' && parts[1]) {
         const html = await readFile(path.join(annotatorPublicDir, 'session.html'), 'utf8');
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Referrer-Policy': 'no-referrer',
+        });
         res.end(html);
         return;
       }
@@ -137,11 +224,15 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
         const body = (await readJsonBody(req)) as { globalNote?: string };
         const result = await service.submit(parts[1], body.globalNote);
         send(200, result);
+        void service.closeAnnotatorTab(parts[1]);
         return;
       }
 
       if (req.method === 'GET' && parts[0] === 'sessions' && parts[1] && parts[2] === 'wait') {
         const timeoutSeconds = Number(url.searchParams.get('timeout') ?? '600');
+        if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0 || timeoutSeconds > 600) {
+          throw new InvalidJsonBodyError();
+        }
         const result = await service.waitForSubmission(parts[1], timeoutSeconds);
         send(200, result);
         return;
@@ -182,9 +273,37 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
         const sessionId = parts[2];
         const sub = parts.slice(4);
 
+        if (req.method === 'POST' && sub.length === 3 && sub[0] === 'groups' && sub[1] && sub[2] === 'references') {
+          const body = (await readJsonBody(req, 12 * 1024 * 1024)) as { pngBase64: string; label?: string };
+          const reference = await service.uploadGroupReference(sessionId, sub[1], body.pngBase64, { label: body.label });
+          send(200, { reference });
+          return;
+        }
+
+        if (req.method === 'GET' && sub.length === 2 && sub[0] === 'references') {
+          const image = await service.getReferenceImage(sessionId, sub[1]);
+          res.writeHead(200, {
+            'Content-Type': 'image/png',
+            'Cache-Control': 'no-store',
+            'Referrer-Policy': 'no-referrer',
+          });
+          res.end(image);
+          return;
+        }
+
+        if (req.method === 'DELETE' && sub.length === 4 && sub[0] === 'groups' && sub[1] && sub[2] === 'references' && sub[3]) {
+          service.detachGroupReference(sessionId, sub[1], sub[3]);
+          send(200, { ok: true });
+          return;
+        }
+
         if (req.method === 'GET' && sub.length === 1 && sub[0] === 'screenshot') {
           const screenshot = service.getCaptureScreenshot(sessionId);
-          res.writeHead(200, { 'Content-Type': 'image/png' });
+          res.writeHead(200, {
+            'Content-Type': 'image/png',
+            'Cache-Control': 'no-store',
+            'Referrer-Policy': 'no-referrer',
+          });
           res.end(screenshot);
           return;
         }
@@ -246,7 +365,19 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
 
         if (req.method === 'POST' && sub.length === 1 && sub[0] === 'submit') {
           const result = await service.submit(sessionId);
-          send(200, { taskId: result.taskId });
+          send(200, { taskId: result.taskId, cleanupWarnings: result.cleanupWarnings });
+          // Closing the annotation tab MUST happen after the response above
+          // has actually been flushed to the client, not before/during: the
+          // in-page `app.submit()` fetch is running on this exact tab, and
+          // closing it out from under an in-flight response body read hangs
+          // that promise forever (session.html's success overlay/UI status
+          // never appears). `res.end()` (inside `send`) queues the write;
+          // deferring to the next macrotask via `setTimeout` gives the
+          // socket a beat to actually deliver it before the page is torn
+          // down.
+          setTimeout(() => {
+            void service.closeAnnotatorTab(sessionId);
+          }, 300);
           return;
         }
       }
@@ -267,14 +398,17 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
 
       send(404, { error: 'not_found' });
     } catch (err) {
-      send(errorToHttpStatus(err), { error: (err as Error).name, message: (err as Error).message });
+      const status = errorToHttpStatus(err);
+      send(status, err instanceof MissingAttachedReferenceError
+        ? { error: 'missing_attached_reference', message: err.message }
+        : status === 500 ? { error: 'internal_error' } : { error: 'bad_request' });
     }
   });
 
   await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   const actualPort = typeof address === 'object' && address ? address.port : port;
-  service.setSelfOrigin({ port: actualPort, token });
+  service.setSelfOrigin({ port: actualPort });
 
   return {
     server,
@@ -282,8 +416,18 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
     token,
     service,
     close: async () => {
-      await service.shutdown();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      const serverClosed = new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+      const forceCloseTimer = setTimeout(() => server.closeAllConnections(), 2_000);
+      try {
+        const results = await Promise.allSettled([service.shutdown(), serverClosed]);
+        const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        if (failure) throw failure.reason;
+      } finally {
+        clearTimeout(forceCloseTimer);
+        server.closeAllConnections();
+      }
     },
   };
 }

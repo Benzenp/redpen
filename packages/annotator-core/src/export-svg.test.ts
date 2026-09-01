@@ -45,6 +45,8 @@ test('renderOverlaySvg escapes text mark content to avoid breaking the XML docum
   assert.ok(!svg.includes('<script>alert(1)</script>'));
   assert.ok(svg.includes('&lt;script&gt;'));
   assert.ok(svg.includes('&quot;quoted&quot;'));
+  assert.match(svg, /<foreignObject/);
+  assert.match(svg, /white-space:pre-wrap/);
   void group;
 });
 
@@ -64,6 +66,14 @@ test('renderOverlaySvg emits one SVG primitive per mark type without throwing', 
     to: { x: 50, y: 50 },
     bounds: { x: 0, y: 0, width: 50, height: 50 },
     normalizedBounds: { x: 0, y: 0, width: 50, height: 50 },
+  });
+  const line = store.addMark({
+    type: 'line',
+    frameId: FRAME,
+    from: { x: 20, y: 0 },
+    to: { x: 70, y: 50 },
+    bounds: { x: 20, y: 0, width: 50, height: 50 },
+    normalizedBounds: { x: 20, y: 0, width: 50, height: 50 },
   });
   store.addMark({
     type: 'freehand',
@@ -85,4 +95,23 @@ test('renderOverlaySvg emits one SVG primitive per mark type without throwing', 
   assert.match(svg, /<line/);
   assert.match(svg, /<polyline/);
   assert.equal((svg.match(/<rect/g) ?? []).length, 2); // rectangle mark + mask mark
+  assert.match(svg, new RegExp(`<line x1="20" y1="0" x2="70" y2="50" stroke="[^"]+" stroke-width="2" data-mark-id="${line.id}"`));
+  assert.doesNotMatch(svg, new RegExp(`data-mark-id="${line.id}"[^>]*marker-end`));
+});
+
+test('renderOverlaySvg renders patch destinations and source-to-destination indicators', () => {
+  const store = new AnnotatorStore();
+  const patch = store.addMark({
+    type: 'patch',
+    frameId: FRAME,
+    sourceRect: { x: 2, y: 4, width: 10, height: 8 },
+    bounds: { x: 40, y: 50, width: 20, height: 16 },
+    normalizedBounds: { x: 40, y: 50, width: 20, height: 16 },
+  } as unknown as NewMarkInput);
+
+  const svg = renderOverlaySvg({ width: 100, height: 100 }, store.getMarks(), store.getGroups(), []);
+  assert.match(svg, new RegExp(`data-mark-id="${patch.id}"`));
+  assert.match(svg, /x="2" y="4" width="10" height="8" fill="#fff"/);
+  assert.match(svg, /stroke-dasharray="4 2"/);
+  assert.match(svg, /x1="7" y1="8" x2="50" y2="58"/);
 });

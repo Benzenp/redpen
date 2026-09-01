@@ -7,7 +7,7 @@
  * they were submitted (docs/IMPLEMENTATION_PLAN.md Phase 6 완료 조건:
  * "이전 이미지와 지시는 변경되지 않고 보존된다").
  */
-import type { VisualTask, DomTarget, Frame, InstructionGroup, Mark } from '@redpen/protocol/schema';
+import type { VisualTask, DomTarget, Frame, InstructionGroup, Mark, ReferenceAsset } from '@redpen/protocol/schema';
 
 export interface CreateRevisionInput {
   newTaskId: string;
@@ -16,6 +16,7 @@ export interface CreateRevisionInput {
   groups: readonly InstructionGroup[];
   marks: readonly Mark[];
   targets: readonly DomTarget[];
+  references: readonly ReferenceAsset[];
   globalNote?: string;
 }
 
@@ -36,6 +37,7 @@ export function createRevision(input: CreateRevisionInput): VisualTask {
     groups: [...input.groups],
     marks: [...input.marks],
     targets: [...input.targets],
+    references: [...input.references],
   };
 }
 

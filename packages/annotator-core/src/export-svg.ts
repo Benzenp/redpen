@@ -27,14 +27,31 @@ function markToSvgElement(mark: Mark, color: string): string {
     }
     case 'arrow':
       return `<line x1="${mark.from.x}" y1="${mark.from.y}" x2="${mark.to.x}" y2="${mark.to.y}" stroke="${color}" stroke-width="2" marker-end="url(#redpen-arrowhead)" data-mark-id="${mark.id}" data-group-id="${mark.groupId}" />`;
+    case 'line':
+      return `<line x1="${mark.from.x}" y1="${mark.from.y}" x2="${mark.to.x}" y2="${mark.to.y}" stroke="${color}" stroke-width="2" data-mark-id="${mark.id}" data-group-id="${mark.groupId}" />`;
     case 'freehand': {
       const points = mark.points.map((p) => `${p.x},${p.y}`).join(' ');
       return `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="2" data-mark-id="${mark.id}" data-group-id="${mark.groupId}" />`;
     }
     case 'text':
-      return `<text x="${mark.anchor.x}" y="${mark.anchor.y}" fill="${color}" font-size="14" data-mark-id="${mark.id}" data-group-id="${mark.groupId}">${escapeXml(mark.text)}</text>`;
+      return (
+        `<foreignObject x="${mark.bounds.x}" y="${mark.bounds.y}" width="${mark.bounds.width}" height="${mark.bounds.height}" data-mark-id="${mark.id}" data-group-id="${mark.groupId}">` +
+        `<div xmlns="http://www.w3.org/1999/xhtml" style="color:${color};font:14px sans-serif;line-height:1.25;white-space:pre-wrap;overflow:hidden;overflow-wrap:anywhere;">${escapeXml(mark.text)}</div>` +
+        `</foreignObject>`
+      );
     case 'mask':
       return `<rect x="${mark.bounds.x}" y="${mark.bounds.y}" width="${mark.bounds.width}" height="${mark.bounds.height}" fill="${color}" fill-opacity="1" data-mark-id="${mark.id}" data-group-id="${mark.groupId}" />`;
+    case 'patch': {
+      const sourceCenterX = mark.sourceRect.x + mark.sourceRect.width / 2;
+      const sourceCenterY = mark.sourceRect.y + mark.sourceRect.height / 2;
+      const destinationCenterX = mark.bounds.x + mark.bounds.width / 2;
+      const destinationCenterY = mark.bounds.y + mark.bounds.height / 2;
+      return (
+        `<rect x="${mark.sourceRect.x}" y="${mark.sourceRect.y}" width="${mark.sourceRect.width}" height="${mark.sourceRect.height}" fill="#fff" stroke="${color}" stroke-width="1.5" stroke-dasharray="4 2" data-mark-id="${mark.id}" data-group-id="${mark.groupId}" />` +
+        `<rect x="${mark.bounds.x}" y="${mark.bounds.y}" width="${mark.bounds.width}" height="${mark.bounds.height}" fill="none" stroke="${color}" stroke-width="2" data-mark-id="${mark.id}" data-group-id="${mark.groupId}" />` +
+        `<line x1="${sourceCenterX}" y1="${sourceCenterY}" x2="${destinationCenterX}" y2="${destinationCenterY}" stroke="${color}" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#redpen-arrowhead)" data-mark-id="${mark.id}" data-group-id="${mark.groupId}" />`
+      );
+    }
   }
 }
 
@@ -69,7 +86,7 @@ export function renderOverlaySvg(
 
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${viewport.width}" height="${viewport.height}" viewBox="0 0 ${viewport.width} ${viewport.height}">`,
-    `<defs><marker id="redpen-arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" /></marker></defs>`,
+    `<defs><marker id="redpen-arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="context-stroke" /></marker></defs>`,
     `  ${markElements}`,
     `  ${badgeElements}`,
     `</svg>`,

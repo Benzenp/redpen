@@ -30,7 +30,11 @@ export function generateTargetId(): string {
   return `tgt_${ulid()}`;
 }
 
-const ID_PREFIX_PATTERN = /^(rps|rpt|frm|grp|mrk|tgt)_[0-9A-HJKMNP-TV-Z]{26}$/;
+export function generateReferenceId(): string {
+  return `ref_${ulid()}`;
+}
+
+const ID_PREFIX_PATTERN = /^(rps|rpt|frm|grp|mrk|tgt|ref)_[0-9A-HJKMNP-TV-Z]{26}$/;
 
 export function isValidRedpenId(id: string): boolean {
   return ID_PREFIX_PATTERN.test(id);
