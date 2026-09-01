@@ -13,6 +13,8 @@ import type { Mark, InstructionGroup } from '@redpen/protocol/schema';
 
 export type ToolName = 'pen' | 'arrow' | 'rectangle' | 'ellipse' | 'text' | 'mask' | 'select' | 'erase';
 
+const ERASE_HIT_RADIUS_PX = 10;
+
 interface AnnotatorState {
   frameId: string;
   viewport: { width: number; height: number };
@@ -123,6 +125,26 @@ export class SessionAnnotatorApp {
     this.api = new AnnotatorApiClient({ sessionId: opts.sessionId, token: opts.token });
     this.attachPointerHandlers();
     this.attachWheelZoom();
+    this.attachKeyboardShortcuts();
+  }
+
+  /** Ctrl/Cmd+Z = undo, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y = redo. */
+  private attachKeyboardShortcuts(): void {
+    window.addEventListener('keydown', (event) => {
+      const meta = event.ctrlKey || event.metaKey;
+      if (!meta) return;
+      const key = event.key.toLowerCase();
+      if (key === 'z' && event.shiftKey) {
+        event.preventDefault();
+        void this.redo();
+      } else if (key === 'z') {
+        event.preventDefault();
+        void this.undo();
+      } else if (key === 'y') {
+        event.preventDefault();
+        void this.redo();
+      }
+    });
   }
 
   async load(): Promise<void> {
@@ -182,7 +204,11 @@ export class SessionAnnotatorApp {
       }
 
       const point = this.toScreenshotSpace(canvasPoint.x, canvasPoint.y);
-      if (this.tool === 'pen') {
+      if (this.tool === 'erase') {
+        const hit = this.findMarkNear(point);
+        if (hit) void this.removeMark(hit.id);
+        return;
+      } else if (this.tool === 'pen') {
         this.drawing = { points: [point] };
       } else if (this.tool === 'rectangle' || this.tool === 'ellipse' || this.tool === 'mask' || this.tool === 'arrow') {
         this.dragStart = point;
@@ -254,6 +280,29 @@ export class SessionAnnotatorApp {
         }
       }
     });
+  }
+
+  /**
+   * Finds the topmost (most-recently-added) mark whose bounds contain
+   * `point`, expanded by a small tolerance so thin freehand/arrow strokes
+   * are still easy to click on with the erase tool.
+   */
+  private findMarkNear(point: { x: number; y: number }): Mark | null {
+    if (!this.state) return null;
+    const tolerance = ERASE_HIT_RADIUS_PX / this.scale;
+    for (let i = this.state.marks.length - 1; i >= 0; i--) {
+      const mark = this.state.marks[i];
+      const b = mark.bounds;
+      if (
+        point.x >= b.x - tolerance &&
+        point.x <= b.x + b.width + tolerance &&
+        point.y >= b.y - tolerance &&
+        point.y <= b.y + b.height + tolerance
+      ) {
+        return mark;
+      }
+    }
+    return null;
   }
 
   private async commitAddMark(mark: Omit<Mark, 'id' | 'groupId'>): Promise<void> {

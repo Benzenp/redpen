@@ -160,6 +160,65 @@ async function main() {
     const panAfter = await page.evaluate(() => (window as unknown as { __redpenSessionApp: { panX: number } }).__redpenSessionApp.panX);
     record('shift-drag-pans-the-canvas', panAfter !== panBefore, `before=${panBefore} after=${panAfter}`);
 
+    // --- Ctrl+Z / Ctrl+Shift+Z keyboard shortcuts drive real undo/redo ---
+    const marksBeforeKeyboardUndo = await page.evaluate(
+      () => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length,
+    );
+    await page.keyboard.press('Control+z');
+    await page.waitForTimeout(200);
+    const marksAfterKeyboardUndo = await page.evaluate(
+      () => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length,
+    );
+    record(
+      'ctrl-z-keyboard-shortcut-undoes-the-last-mark',
+      marksAfterKeyboardUndo === marksBeforeKeyboardUndo - 1,
+      `before=${marksBeforeKeyboardUndo} after=${marksAfterKeyboardUndo}`,
+    );
+
+    await page.keyboard.press('Control+Shift+z');
+    await page.waitForTimeout(200);
+    const marksAfterKeyboardRedo = await page.evaluate(
+      () => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length,
+    );
+    record(
+      'ctrl-shift-z-keyboard-shortcut-redoes-the-mark',
+      marksAfterKeyboardRedo === marksBeforeKeyboardUndo,
+      `before=${marksBeforeKeyboardUndo} after=${marksAfterKeyboardRedo}`,
+    );
+
+    // --- erase tool removes a mark via a real click on it ---
+    // Read the rectangle mark's actual screenshot-space bounds back from
+    // server state (rather than assuming the earlier drag's screen
+    // coordinates map 1:1 to screenshot space \u2014 fit-to-viewport scaling on
+    // a full-page capture already applies a non-1 scale from the start),
+    // then convert its center through the app's live pan/scale to get a
+    // canvas-space click point.
+    const eraseCanvasPoint = await page.evaluate(() => {
+      const a = (window as unknown as {
+        __redpenSessionApp: { scale: number; panX: number; panY: number; state: { marks: Array<{ type: string; bounds: { x: number; y: number; width: number; height: number } }> } };
+      }).__redpenSessionApp;
+      const rect = a.state.marks.find((m) => m.type === 'rectangle')!;
+      const centerX = rect.bounds.x + rect.bounds.width / 2;
+      const centerY = rect.bounds.y + rect.bounds.height / 2;
+      return { x: centerX * a.scale + a.panX, y: centerY * a.scale + a.panY };
+    });
+    await page.click('#toolbar button[data-tool="erase"]');
+    await page.mouse.click(box.x + eraseCanvasPoint.x, box.y + eraseCanvasPoint.y);
+    await page.waitForTimeout(200);
+    const marksAfterErase = await page.evaluate(
+      () => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length,
+    );
+    record('erase-tool-removes-the-clicked-mark', marksAfterErase === marksAfterKeyboardRedo - 1, `before=${marksAfterKeyboardRedo} after=${marksAfterErase}`);
+
+    // Redraw the erased rectangle so later canSubmit/group-count checks still
+    // see a non-empty group #1.
+    await page.click('#toolbar button[data-tool="rectangle"]');
+    await page.mouse.move(box.x + 300, box.y + 300);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 450, box.y + 400, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+
     // --- create a second instruction group via the real sidebar button ---
     await page.click('#new-instruction');
     await page.waitForTimeout(150);
@@ -184,9 +243,9 @@ async function main() {
     await page.click('#submit-button');
     await page.waitForSelector('#submit-status:has-text("제출 완료")', { timeout: 5000 });
     const submitStatusText = await page.textContent('#submit-status');
-    record('real-ui-submit-button-completes-and-shows-task-id', /제출 완료: rpt_/.test(submitStatusText ?? ''), submitStatusText ?? '');
+    record('real-ui-submit-button-completes-and-shows-task-id', /제출 완료.*rpt_/.test(submitStatusText ?? ''), submitStatusText ?? '');
 
-    const taskIdMatch = /제출 완료: (rpt_\w+)/.exec(submitStatusText ?? '');
+    const taskIdMatch = /(rpt_\w+)/.exec(submitStatusText ?? '');
     const taskId = taskIdMatch?.[1];
 
     await pwBrowser.close();

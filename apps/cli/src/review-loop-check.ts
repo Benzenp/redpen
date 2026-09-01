@@ -94,8 +94,16 @@ async function main() {
     const openResult = await runCli(['open', server.url, '--project', workspaceRoot, '--json'], env);
     const sessionId = JSON.parse(openResult.stdout.trim()).session.id as string;
 
-    await runCli(['freeze', sessionId, '--json'], env);
+    const freeze0 = await runCli(['freeze', sessionId, '--json'], env);
+    if (freeze0.code !== 0) {
+      record('v0-freeze-succeeds', false, `code=${freeze0.code} stderr=${freeze0.stderr.slice(0, 500)}`);
+      throw new Error(`v0 freeze failed: ${freeze0.stderr}`);
+    }
     const submit0 = await runCli(['submit', sessionId, '--note', 'v0 note', '--json'], env);
+    if (submit0.code !== 0 || !submit0.stdout.trim()) {
+      record('v0-submit-succeeds', false, `code=${submit0.code} stdout=${submit0.stdout.trim()} stderr=${submit0.stderr.slice(0, 500)}`);
+      throw new Error(`v0 submit failed: code=${submit0.code} stderr=${submit0.stderr}`);
+    }
     const submit0Json = JSON.parse(submit0.stdout.trim());
     const taskV0Id = submit0Json.taskId as string;
     record('v0-submit-succeeds', typeof taskV0Id === 'string' && taskV0Id.length > 0, `taskId=${taskV0Id}`);

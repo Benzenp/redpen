@@ -91,14 +91,24 @@ export class RedpenApplicationService {
     const transition = session.state === 'review' ? 'annotate-revision' : 'freeze';
     const nextState = nextSessionState(session.state, transition);
     const domIndex = await collectDomIndex(page as Page);
-    const screenshot = await page.screenshot();
+    // Captures the entire scrollable page, not just the currently visible
+    // viewport, so the annotation UI shows the whole page at once instead
+    // of forcing the user to scroll while marking it up.
+    // Grounding at submit time still re-scans the live page's CURRENT
+    // viewport (docs/ARCHITECTURE.md §4.3's collector is viewport-scoped
+    // by design, and Phase 3's tests assert that scoping), so marks drawn
+    // far below the fold ground best when the live page is scrolled back
+    // near that position before submit — a known trade-off, not a
+    // regression.
+    const screenshot = await page.screenshot({ fullPage: true });
     const viewport = page.viewportSize() ?? { width: 1280, height: 900 };
+    const fullPageHeight = await page.evaluate(() => document.documentElement.scrollHeight);
 
     this.runtime.setCapture(sessionId, {
       frameId: generateFrameId(),
       screenshot,
       domIndex,
-      viewport: { ...viewport, deviceScaleFactor: domIndex.viewport.deviceScaleFactor },
+      viewport: { width: viewport.width, height: fullPageHeight, deviceScaleFactor: domIndex.viewport.deviceScaleFactor },
       scroll: domIndex.scroll,
       capturedAt: domIndex.capturedAt,
     });

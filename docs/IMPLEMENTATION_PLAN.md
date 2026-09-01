@@ -427,6 +427,15 @@ Agent: 구현 계획 제시
 
 **미해결 항목**: before/after를 나란히 보여주는 실제 UI 컴포넌트, screenshot diff를 daemon/CLI 명령으로 노출하는 것(`redpen diff` 같은 명령), retention 정책의 실제 스케줄러(cron 등)는 구현하지 않았다 — 이번 phase는 각 기능의 핵심 로직과 데이터 모델을 완성하고 CLI를 통해 전체 lifecycle을 증명하는 데 집중했다.
 
+**UI 사용성 후속 개선 (2026-09-01 후속, 사용자 실사용 피드백 반영)**: 실제로 화면을 열어보고 나온 피드백 4건을 반영했다.
+
+- **Ctrl+Z/Ctrl+Shift+Z(또는 Ctrl+Y) 키보드 단축키**: `SessionAnnotatorApp`에 `attachKeyboardShortcuts()`를 추가해 undo/redo를 버튼 클릭 없이 키보드로 실행 가능.
+- **지우개 도구**: 새 `erase` 툴을 추가. 클릭 지점 근처(스케일 보정된 10px 허용 오차)에서 가장 최근에 추가된 mark를 찾아 삭제하는 `findMarkNear()`를 구현.
+- **전체 페이지 캡처**: `freeze()`가 `page.screenshot()`(뷰포트만) 대신 `page.screenshot({ fullPage: true })`를 사용하도록 변경. capture의 `viewport.height`도 `document.documentElement.scrollHeight`로 갱신해 annotator UI의 fit-to-viewport가 전체 페이지 높이를 기준으로 스케일을 잡는다. **알려진 트레이드오프**: grounding은 여전히 제출 시점의 현재(스크롤된) viewport만 스캔한다(docs/ARCHITECTURE.md §4.3의 viewport-scoped 설계는 유지) — 스크롤 맨 아래에 그린 mark는 제출 전에 그 위치로 스크롤해둬야 grounding 품질이 좋다.
+- **미니멀 UI 리디자인**: `session.html`을 전면 재작성. 플랫한 흑백 톤(accent를 순수 검정으로), 8px 그리드 기반 spacing, 얇은 1px 보더, 그룹 카드는 색상 점(dot)+번호+표시 개수로 축약, 사이드바에 섹션 레이블(소문자 대비 uppercase 11px) 추가, 하단 고정 제출 영역 분리, 좌하단 zoom 퍼센트 인디케이터 추가. 키보드 단축키(P/A/R/O/T/M/E)로 툴 전환도 추가.
+
+Verified: `apps/cli/src/ui-e2e-check.ts`에 3개 체크 추가(Ctrl+Z가 실제로 undo, Ctrl+Shift+Z가 실제로 redo, erase 도구로 실제 클릭한 mark가 삭제됨 — pan/zoom 이후에도 좌표 변환이 정확한지까지 포함) — 13/13 통과. 기존 lifecycle(18/18)/daemon-lifecycle(11/11)/mcp(11/11)/review-loop(11/11) 및 패키지 유닛 테스트(93개) 전부 회귀 없이 재통과. `tsc --noEmit` clean.
+
 ## 10. 테스트 전략
 
 ### Unit
