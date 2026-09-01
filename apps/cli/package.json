@@ -27,6 +27,7 @@
     "test:mcp": "tsx src/mcp/mcp-check.ts",
     "test:review-loop": "tsx src/review-loop-check.ts",
     "test:daemon-lifecycle": "tsx src/daemon-lifecycle-check.ts",
+    "test:managed-demo-lifecycle": "tsx src/managed-demo-lifecycle-check.ts",
     "test:ui-e2e": "tsx src/ui-e2e-check.ts",
     "test:patch-reference": "tsx src/patch-reference-e2e-check.ts"
   },

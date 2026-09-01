@@ -279,6 +279,11 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
       if (req.method === 'DELETE' && parts[0] === 'sessions' && parts[1]) {
         await service.closeSession(parts[1]);
         send(200, { ok: true });
+        if (url.searchParams.get('shutdownIfIdle') === '1') {
+          setImmediate(() => {
+            if (service.isIdle()) server.emit('redpenShutdownRequested');
+          });
+        }
         return;
       }
 

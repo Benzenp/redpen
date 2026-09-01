@@ -30,7 +30,10 @@ words.
 ```text
 User: 이 페이지 수정할 거야. Redpen 열어봐.
 Agent: confirm the target is a running localhost/127.0.0.1 URL
-Agent: redpen_start_session(url, workspace_root)
+Agent: if the target is already running, redpen_start_session(url,
+       workspace_root); for this repository's demo, run
+       `node fixtures/demo-app/redpen-session.mjs` instead so one process owns
+       the target server, Redpen session, and cleanup watcher
 User: navigates, freezes the screen, draws N instruction groups, submits
 Agent: redpen_wait_for_submission(session_id) — or, if the host's tool
        timeout is shorter than the user needs, poll redpen_get_task later
@@ -45,6 +48,10 @@ User: explicitly confirms or corrects the interpretation
 Agent: only after confirmation, set state to working and implement
 Agent: set state to review; Redpen reloads and focuses the still-open target
        page so the user sees the updated code
+User: accepts the reviewed result
+Agent: set state to done, close the session, stop the daemon when no other
+       Redpen session is active, and stop every target-server process the
+       agent started for this session
 ```
 
 ## Tools
@@ -66,6 +73,44 @@ Agent: set state to review; Redpen reloads and focuses the still-open target
   `redpen_update_task(session_id, "review")`.
 - `redpen_cancel_session(session_id)` — cancels a session that is no longer
   needed.
+
+## Required lifecycle cleanup
+
+A Redpen run is not complete when its task merely reaches `done`. The agent
+MUST clean up every runtime resource it owns so the same host session can
+start Redpen again without stale ports or orphaned processes.
+
+- When the agent starts the target app, it MUST record the managed job/process
+  handle and listening port. A target app that was already running belongs to
+  the user and MUST NOT be stopped.
+- For this repository's demo, use
+  `node fixtures/demo-app/redpen-session.mjs` rather than separately starting
+  `pnpm demo` and `redpen open`. The managed runner opens Redpen itself and
+  owns the static server in the same process.
+- Prefer launching the actual server executable directly. Do not rely on
+  cancelling a package-runner parent such as `pnpm` or `npm`: on Windows its
+  Node child can survive as an orphan. If a wrapper is unavoidable, terminate
+  and verify the complete owned process tree.
+- At session launch, install an ownership watcher for an agent-started target
+  server. Closing the dedicated Chromium window shuts down the Redpen daemon;
+  the watcher MUST treat that daemon/browser exit as a cleanup event and stop
+  the owned target-server process tree immediately.
+- After the user accepts a review, perform this sequence without waiting for
+  another prompt:
+  1. advance the session to `done`;
+  2. close the session with an atomic idle shutdown
+     (`redpen close <session-id> --shutdown-if-idle` when using the CLI), so
+     the daemon stops only when it has no other open target page;
+  3. if atomic idle shutdown is unavailable, stop the daemon only after
+     confirming no other Redpen session is active;
+  4. cancel submission waiters and other Redpen background jobs;
+  5. stop the complete process tree of every target server started by the
+     agent for this session.
+- Cancellation and unexpected Chromium closure use the same cleanup sequence,
+  except that an already-exited daemon needs no additional stop command.
+- Before reporting completion, verify that the owned target port is no longer
+  listening, the daemon discovery record is gone, and no owned background job
+  or child process remains.
 
 ## Reading a task bundle
 

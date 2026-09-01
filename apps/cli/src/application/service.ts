@@ -109,6 +109,7 @@ export class RedpenApplicationService {
   private readonly sessionReferenceIds = new Map<string, Set<string>>();
   private readonly submittingSessions = new Set<string>();
   private readonly initializedReferenceWorkspaces = new Set<string>();
+  private activeOpenOperations = 0;
 
   private assertAnnotationMutable(sessionId: string): void {
     if (this.submittingSessions.has(sessionId)) throw new AnnotationSubmissionInProgressError(sessionId);
@@ -184,42 +185,51 @@ export class RedpenApplicationService {
   }
 
   async openSession(opts: OpenSessionOptions): Promise<VisualSession> {
-    assertLoopbackUrl(opts.url);
-    if (!this.initializedReferenceWorkspaces.has(opts.workspaceRoot)) {
-      const staleReferences = await persistListReferenceImages(opts.workspaceRoot);
-      for (const reference of staleReferences) {
-        await persistDeleteReferenceImage(opts.workspaceRoot, reference.id);
-      }
-      this.initializedReferenceWorkspaces.add(opts.workspaceRoot);
-    }
-    const now = new Date().toISOString();
-    const session: VisualSession = {
-      schemaVersion: 1,
-      id: generateSessionId(),
-      state: 'browsing',
-      workspaceRoot: opts.workspaceRoot,
-      targetUrl: opts.url,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const capabilities = { overlay: randomUUID(), annotator: randomUUID() };
-    this.capabilities.set(session.id, capabilities);
+    this.activeOpenOperations += 1;
     try {
-      const page = await this.browser.openPage(
-        session.id,
-        opts.url,
-        this.selfOrigin ? { port: this.selfOrigin.port, token: capabilities.overlay } : undefined,
-      );
-      this.runtime.setPage(session.id, page);
-    } catch (err) {
-      session.state = 'error';
-      session.lastError = { code: 'OPEN_FAILED', message: (err as Error).message };
-      this.revokeBrowserCapabilities(session.id);
-    }
+      assertLoopbackUrl(opts.url);
+      if (!this.initializedReferenceWorkspaces.has(opts.workspaceRoot)) {
+        const staleReferences = await persistListReferenceImages(opts.workspaceRoot);
+        for (const reference of staleReferences) {
+          await persistDeleteReferenceImage(opts.workspaceRoot, reference.id);
+        }
+        this.initializedReferenceWorkspaces.add(opts.workspaceRoot);
+      }
+      const now = new Date().toISOString();
+      const session: VisualSession = {
+        schemaVersion: 1,
+        id: generateSessionId(),
+        state: 'browsing',
+        workspaceRoot: opts.workspaceRoot,
+        targetUrl: opts.url,
+        createdAt: now,
+        updatedAt: now,
+      };
 
-    await saveSession(session);
-    return session;
+      const capabilities = { overlay: randomUUID(), annotator: randomUUID() };
+      this.capabilities.set(session.id, capabilities);
+      try {
+        const page = await this.browser.openPage(
+          session.id,
+          opts.url,
+          this.selfOrigin ? { port: this.selfOrigin.port, token: capabilities.overlay } : undefined,
+        );
+        this.runtime.setPage(session.id, page);
+      } catch (err) {
+        session.state = 'error';
+        session.lastError = { code: 'OPEN_FAILED', message: (err as Error).message };
+        this.revokeBrowserCapabilities(session.id);
+      }
+
+      await saveSession(session);
+      return session;
+    } finally {
+      this.activeOpenOperations -= 1;
+    }
+  }
+
+  isIdle(): boolean {
+    return this.activeOpenOperations === 0 && !this.runtime.hasOpenPage();
   }
 
   async getSession(sessionId: string): Promise<VisualSession> {

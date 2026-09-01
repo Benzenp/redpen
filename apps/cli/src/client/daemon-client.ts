@@ -81,8 +81,9 @@ export class DaemonClient {
     return this.request<{ session: unknown }>('POST', `/sessions/${sessionId}/cancel`);
   }
 
-  closeSession(sessionId: string) {
-    return this.request<{ ok: boolean }>('DELETE', `/sessions/${sessionId}`);
+  closeSession(sessionId: string, shutdownIfIdle = false) {
+    const query = shutdownIfIdle ? '?shutdownIfIdle=1' : '';
+    return this.request<{ ok: boolean }>('DELETE', `/sessions/${sessionId}${query}`);
   }
 
   getTask(taskId: string, workspaceRoot: string) {

@@ -168,7 +168,7 @@ async function main(): Promise<number> {
       case 'close': {
         const sessionId = rest[0];
         const client = await DaemonClient.connect();
-        await client.closeSession(sessionId);
+        await client.closeSession(sessionId, hasFlag(rest, '--shutdown-if-idle'));
         if (json) printJson({ ok: true });
         else printHuman(`session ${sessionId} closed`);
         return EXIT_CODES.OK;

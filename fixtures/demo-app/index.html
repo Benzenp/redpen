@@ -207,25 +207,6 @@
       border-radius: 6px;
       font-size: 14px;
     }
-    .empty-panel {
-      border: 2px dashed var(--border);
-      border-radius: 10px;
-      padding: 32px;
-      text-align: center;
-      color: var(--muted);
-      font-size: 14px;
-    }
-    .amount-widget {
-      min-height: 104px;
-      display: grid;
-      place-items: center;
-      border-style: solid;
-      background: #f8fafc;
-      color: var(--text);
-      font-size: 32px;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-    }
     .bottom-widgets-row {
       display: grid;
       grid-template-columns: minmax(0, 1fr) 322px;
@@ -234,8 +215,33 @@
       margin-top: -8px;
       margin-bottom: 24px;
     }
-    .bottom-widgets-row .stat-card {
-      min-height: 100%;
+    .customer-amount-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .customer-amount-card h2 {
+      margin: 0 0 12px;
+      font-size: 16px;
+    }
+    .customer-amount-card table {
+      font-size: 13px;
+    }
+    .customer-amount-card th,
+    .customer-amount-card td {
+      padding: 9px 10px;
+      border: 1px solid #27272a;
+    }
+    .customer-amount-card th {
+      background: #09090b;
+      color: white;
+      font-size: 12px;
+      text-transform: none;
+    }
+    .customer-amount-card th:last-child,
+    .customer-amount-card td:last-child {
+      text-align: right;
     }
     .chart-card {
       background: var(--surface);
@@ -368,17 +374,17 @@
       </div>
 
       <section class="stat-grid" data-testid="stat-grid">
-        <div class="stat-card" data-testid="stat-revenue">
-          <div class="label">이번 달 매출</div>
-          <div class="value">₩48,290,000</div>
-          <div class="delta up">▲ 12.4% 전월 대비</div>
-        </div>
+        <div class="stat-slot-empty" aria-hidden="true"></div>
         <div class="stat-card" data-testid="stat-customers">
           <div class="label">활성 고객</div>
           <div class="value">1,204</div>
           <div class="delta up">▲ 3.1%</div>
         </div>
-        <div class="stat-slot-empty" aria-hidden="true"></div>
+        <div class="stat-card" data-testid="stat-revenue">
+          <div class="label">이번 달 매출</div>
+          <div class="value">₩48,290,000</div>
+          <div class="delta up">▲ 12.4% 전월 대비</div>
+        </div>
         <div class="stat-slot-empty" aria-hidden="true"></div>
       </section>
 
@@ -465,13 +471,6 @@
         </div>
       </section>
 
-      <section class="panel" data-testid="empty-widget-panel">
-        <h2>빈 위젯 영역</h2>
-        <div class="empty-panel amount-widget" data-testid="amount-widget" aria-label="100만원 위젯">
-          100만원
-        </div>
-      </section>
-
       <div class="bottom-widgets-row">
         <section class="chart-card" data-testid="sales-time-chart">
           <h2>매출·시간 그래프</h2>
@@ -517,11 +516,35 @@
             </g>
           </svg>
         </section>
-        <div class="stat-card" data-testid="stat-pending">
-          <div class="label">미결제 인보이스</div>
-          <div class="value">7건</div>
-          <div class="delta">₩3,120,000</div>
-        </div>
+        <section class="customer-amount-card" data-testid="customer-amount-table-panel">
+          <h2>고객별 금액</h2>
+          <table data-testid="customer-amount-table">
+            <thead>
+              <tr>
+                <th>고객</th>
+                <th>금액</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>정다혜</td>
+                <td>₩1,290,000</td>
+              </tr>
+              <tr>
+                <td>이서준</td>
+                <td>₩420,000</td>
+              </tr>
+              <tr>
+                <td>박지우</td>
+                <td>₩980,000</td>
+              </tr>
+              <tr>
+                <td>최윤아</td>
+                <td>₩2,150,000</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
       </div>
     </main>
   </div>

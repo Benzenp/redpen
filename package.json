@@ -9,6 +9,7 @@
   "scripts": {
     "build": "corepack pnpm --filter @redpen/annotator run build && corepack pnpm --filter @redpen/cli run build",
     "spike:capture": "corepack pnpm --filter @redpen/cli run spike:capture",
-    "demo": "node fixtures/demo-app/serve.mjs"
+    "demo": "node fixtures/demo-app/serve.mjs",
+    "demo:redpen": "node fixtures/demo-app/redpen-session.mjs"
   }
 }

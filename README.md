@@ -74,23 +74,44 @@ Press **F9** in Chromium to capture and annotate the current page. Closing the
 dedicated Chromium window automatically shuts down the Redpen daemon and
 removes its discovery record.
 
+The target dev server is a separate process. If an agent starts it for a
+Redpen session, that agent must retain ownership of its process tree and stop
+it when the result is accepted, the session is cancelled, or the dedicated
+Chromium window closes. On Windows, stopping only an `npm`/`pnpm` wrapper can
+leave its Node child alive; terminate the complete owned process tree and
+verify that the target port is no longer listening. Never stop a target server
+that was already running before Redpen opened.
+
 ## Run from source
 
 ```bash
 corepack pnpm install --frozen-lockfile
 corepack pnpm run build
-corepack pnpm demo
+node fixtures/demo-app/redpen-session.mjs
 ```
 
-In another terminal:
+The managed runner (also available as `corepack pnpm demo:redpen`) starts the
+demo server, opens its Redpen session, and watches the whole lifecycle as one
+owned process. Running the Node entry directly gives process managers the
+actual owner PID instead of a package-runner wrapper. It automatically closes
+the session with `--shutdown-if-idle`, stops the daemon only when it has no
+other open target page, and releases the demo port when:
 
-```bash
-corepack pnpm --filter @redpen/cli exec redpen open http://127.0.0.1:4173/
-```
+- the reviewed task reaches `done` or `cancelled`;
+- the dedicated Chromium window or daemon closes;
+- the package-runner parent exits; or
+- the managed runner receives `SIGINT`/`SIGTERM`.
 
-The Node daemon runs as a hidden background process on Windows. Chromium remains visible by default.
+The Node daemon runs as a hidden background process on Windows. Chromium
+remains visible by default.
 
 Press **F9** or use the in-page **Freeze screen** button to open the annotator.
+
+For a manually split run, `corepack pnpm demo` still starts only the target
+server; open Redpen separately with
+`node apps/cli/bin/redpen.mjs open http://127.0.0.1:4173/ --project .`.
+Whoever starts that server owns its cleanup. Agent-driven QA should use the
+managed `demo:redpen` flow instead.
 
 ## CLI
 
@@ -109,7 +130,7 @@ redpen claim <session-id>
 redpen review <session-id>
 redpen accept <session-id>
 redpen cancel <session-id>
-redpen close <session-id>
+redpen close <session-id> [--shutdown-if-idle]
 redpen mcp
 ```
 
@@ -258,6 +279,7 @@ Browser integration checks:
 ```bash
 REDPEN_HEADLESS=1 corepack pnpm --filter @redpen/cli run test:lifecycle
 REDPEN_HEADLESS=1 corepack pnpm --filter @redpen/cli run test:daemon-lifecycle
+REDPEN_HEADLESS=1 corepack pnpm --filter @redpen/cli run test:managed-demo-lifecycle
 REDPEN_HEADLESS=1 corepack pnpm --filter @redpen/cli run test:review-loop
 REDPEN_HEADLESS=1 corepack pnpm --filter @redpen/cli run test:ui-e2e
 REDPEN_HEADLESS=1 corepack pnpm --filter @redpen/cli run test:patch-reference

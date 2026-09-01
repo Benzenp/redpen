@@ -48,6 +48,12 @@ export class SessionRuntime {
     return this.entries.get(sessionId)?.page;
   }
 
+  hasOpenPage(): boolean {
+    for (const entry of this.entries.values()) {
+      if (entry.page && !entry.page.isClosed()) return true;
+    }
+    return false;
+  }
 
   setCapture(sessionId: string, capture: AnnotatingCapture): void {
     this.entry(sessionId).capture = capture;
