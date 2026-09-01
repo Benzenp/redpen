@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.redpen/
+*.log
+.pnpm-store/
+apps/cli/.spike-profile/
+apps/cli/.spike-output/
+.gjc/

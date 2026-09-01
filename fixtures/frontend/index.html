@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>Redpen capture spike fixture</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, sans-serif;
+      background: #f4f4f5;
+    }
+    .filler {
+      height: 800px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #999;
+      font-size: 20px;
+    }
+    #save-button {
+      position: absolute;
+      top: 850px;
+      left: 120px;
+      width: 160px;
+      height: 48px;
+      font-size: 16px;
+      background: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 6px;
+    }
+    #price-card {
+      position: absolute;
+      top: 1150px;
+      left: 400px;
+      width: 260px;
+      height: 140px;
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    #docs-link {
+      position: absolute;
+      top: 1480px;
+      left: 200px;
+      font-size: 18px;
+      color: #2563eb;
+    }
+    #hidden-element {
+      position: absolute;
+      top: 1000px;
+      left: 900px;
+      display: none;
+    }
+    #offscreen-element {
+      position: absolute;
+      top: 5000px;
+      left: 0;
+    }
+    #secret-input {
+      position: absolute;
+      top: 1300px;
+      left: 700px;
+    }
+  </style>
+</head>
+<body>
+  <div class="filler">Scroll down / 스크롤을 내리세요</div>
+  <button id="save-button" data-testid="save-button">저장하기</button>
+  <div id="price-card" data-testid="price-card" role="region" aria-label="가격 카드">
+    <strong>Pro plan</strong>
+    <p>월 9,900원</p>
+  </div>
+  <a id="docs-link" data-testid="docs-link" href="#docs">문서 보러가기</a>
+  <div id="hidden-element" data-testid="hidden-element">보이지 않아야 함</div>
+  <div id="offscreen-element" data-testid="offscreen-element">화면 밖 요소</div>
+  <input id="secret-input" type="password" data-testid="secret-input" value="super-secret-value" />
+  <div class="filler" style="margin-top: 400px;">Bottom filler</div>
+</body>
+</html>
