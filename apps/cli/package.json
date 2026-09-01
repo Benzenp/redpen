@@ -10,13 +10,15 @@
     "spike:capture": "tsx src/spike/capture-spike.ts",
     "typecheck": "tsc --noEmit",
     "test:lifecycle": "tsx src/lifecycle-check.ts",
-    "test:mcp": "tsx src/mcp/mcp-check.ts"
+    "test:mcp": "tsx src/mcp/mcp-check.ts",
+    "test:review-loop": "tsx src/review-loop-check.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.0",
     "@redpen/annotator-core": "workspace:*",
     "@redpen/grounding": "workspace:*",
     "@redpen/protocol": "workspace:*",
+    "@redpen/review": "workspace:*",
     "playwright": "^1.48.0",
     "zod": "^3.23.8"
   },

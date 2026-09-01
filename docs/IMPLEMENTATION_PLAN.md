@@ -373,20 +373,34 @@ Agent: 구현 계획 제시
 
 ### 작업
 
-- [ ] 기존 task에서 review session 열기
-- [ ] 구현 후 screenshot 캡처
-- [ ] before/after view
-- [ ] review에서 새 annotation revision 생성
-- [ ] revision history와 parent task 연결
-- [ ] accept/done 흐름
-- [ ] 동일 환경 screenshot diff 옵션
-- [ ] task 삭제 및 retention 정책
-- [ ] 진단 bundle과 debug log redaction
+- [x] 기존 task에서 review session 열기
+- [x] 구현 후 screenshot 캡처
+- [x] before/after view (annotator-core store가 마련해두는 before(원본 frame)와 after(revision frame)를 각각 독립 frame으로 저장; 별도 UI 컴포넌트는 아직 없음)
+- [x] review에서 새 annotation revision 생성
+- [x] revision history와 parent task 연결
+- [x] accept/done 흐름
+- [x] 동일 환경 screenshot diff 옵션
+- [x] task 삭제 및 retention 정책
+- [x] 진단 bundle과 debug log redaction
 
 ### 완료 조건
 
 - 하나의 task가 implementation → review → revision → done을 거친다.
 - 이전 이미지와 지시는 변경되지 않고 보존된다.
+
+### Phase 6 실행 결과 (2026-09-01)
+
+`packages/review/src/`(screenshot diff, revision, retention, diagnostics)와 `apps/cli/src/application/service.ts`의 revision-aware submit에 구현. `pnpm --filter @redpen/review run test` 19/19 통과, `pnpm --filter @redpen/cli run test:review-loop`(실제 CLI 자식 프로세스로 전체 완료 조건 스크립트 실행) 11/11 통과, `tsc --noEmit` clean.
+
+- `@redpen/protocol`의 `VisualTask`에 `parentTaskId?: string`을 추가(하위 호환 optional 필드) — revision이 원본 task를 가리키는 연결.
+- `review/revision.ts`: `createRevision()`은 parent task를 절대 mutate하지 않고 완전히 새로운 `VisualTask`(revision 번호 +1, `parentTaskId`=parent.id, 새 frame)를 만든다. `resolveRevisionChain()`은 parentTaskId를 따라가며 oldest-first로 revision history를 복원, 중간에 삭제된 parent를 만나면 조용히 멈춘다.
+- `application/service.ts`의 `submit()`: session에 이미 `activeTaskId`가 있으면(= review 상태에서 다시 freeze한 뒤 제출하는 것) `createRevision`으로 revision bundle을 쓰고, 없으면 기존처럼 `assembleVisualTask`로 최초 task를 만든다. `freeze()`는 세션이 `review` 상태일 때 `annotate-revision` 전이를, 그 외에는 기존 `freeze` 전이를 선택한다.
+- `review/screenshot-diff.ts`: `pixelmatch`+`pngjs`로 동일 크기 PNG 두 장을 비교해 `diffPixelCount`/`diffRatio`/diff PNG를 반환. 크기가 다르면 pixelmatch의 불명확한 예외 대신 `DimensionMismatchError`를 명시적으로 던진다. docs/ARCHITECTURE.md §11이 지적한 "동일 환경에서만 의미있다"는 제약을 그대로 문서화.
+- `review/retention.ts`: `done`/`cancelled` 상태이고 `maxAgeMs`보다 오래된 task만 삭제 후보. 어떤 task가 다른 task의 `parentTaskId`로 여전히 참조되고 있으면(= revision chain의 조상) 나이와 무관하게 삭제 대상에서 제외.
+- `review/diagnostics.ts`: `password`/`token`/`secret`/`cookie`/`authorization`/`apiKey` 계열 키를 재귀적으로(중첩 객체 포함) `[REDACTED]`로 치환하는 진단 bundle 빌더.
+- 완료 조건 검증(`review-loop-check.ts`, 실제 `redpen` CLI 자식 프로세스 구동): open→freeze→submit(v0, revision 0)→claim(working)→review→freeze(annotate-revision, review→annotating)→submit(v1, revision 1, parentTaskId=v0)→claim→review→accept(done) 전체 스크립트가 성공하고, v1 제출 및 accept 이후에도 v0 task.json이 **바이트 단위로 동일**함을 직접 비교해 확인 — "이전 이미지와 지시는 변경되지 않고 보존된다"는 완료 조건을 가장 엄격한 형태로 검증했다.
+
+**미해결 항목**: before/after를 나란히 보여주는 실제 UI 컴포넌트, screenshot diff를 daemon/CLI 명령으로 노출하는 것(`redpen diff` 같은 명령), retention 정책의 실제 스케줄러(cron 등)는 구현하지 않았다 — 이번 phase는 각 기능의 핵심 로직과 데이터 모델을 완성하고 CLI를 통해 전체 lifecycle을 증명하는 데 집중했다.
 
 ## 10. 테스트 전략
 

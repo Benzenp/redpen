@@ -17,6 +17,7 @@ import type { VisualSession, InstructionGroup, Mark } from '@redpen/protocol/sch
 import { writeTaskBundle, readTaskBundle, listTaskIds } from '@redpen/protocol/storage';
 import { collectDomIndex, captureAndGround, assembleVisualTask } from '@redpen/grounding';
 import { AnnotatorStore } from '@redpen/annotator-core';
+import { createRevision } from '@redpen/review';
 
 export interface OpenSessionOptions {
   url: string;
@@ -73,7 +74,8 @@ export class RedpenApplicationService {
     const page = this.runtime.getPage(sessionId);
     if (!page) throw new SessionNotFoundError(sessionId);
 
-    const nextState = nextSessionState(session.state, 'freeze');
+    const transition = session.state === 'review' ? 'annotate-revision' : 'freeze';
+    const nextState = nextSessionState(session.state, transition);
     const domIndex = await collectDomIndex(page as Page);
     const screenshot = await page.screenshot();
     const viewport = page.viewportSize() ?? { width: 1280, height: 900 };
@@ -100,7 +102,14 @@ export class RedpenApplicationService {
     return store;
   }
 
-  /** Submits the active capture's marks/groups as an atomic task bundle. */
+  /**
+   * Submits the active capture's marks/groups as an atomic task bundle. If
+   * the session already has an \`activeTaskId\` (i.e. this is an "annotate
+   * revision" pass from \`review\`), the new bundle is written as an
+   * immutable revision that links back to the parent task via
+   * \`parentTaskId\` (docs/ARCHITECTURE.md \u00a75, docs/IMPLEMENTATION_PLAN.md
+   * Phase 6) \u2014 the parent task's own files are never touched.
+   */
   async submit(sessionId: string, globalNote?: string): Promise<{ session: VisualSession; taskId: string }> {
     const session = await this.getSession(sessionId);
     const capture = this.runtime.getCapture(sessionId);
@@ -110,26 +119,39 @@ export class RedpenApplicationService {
     const page = this.runtime.getPage(sessionId);
     const targets = page ? await captureAndGround(page, capture.frameId, store.getMarks()) : [];
 
+    const frame = {
+      id: capture.frameId,
+      url: session.targetUrl,
+      screenshot: 'frames/frame-001/source.png',
+      annotated: 'frames/frame-001/annotated.png',
+      overlaySvg: 'frames/frame-001/overlay.svg',
+      viewport: capture.viewport,
+      scroll: capture.scroll,
+      capturedAt: capture.capturedAt,
+    };
+
+    const parentTaskId = session.activeTaskId;
     const taskId = generateTaskId();
-    const task = assembleVisualTask({
-      taskId,
-      sessionId,
-      workspaceRoot: session.workspaceRoot,
-      frame: {
-        id: capture.frameId,
-        url: session.targetUrl,
-        screenshot: 'frames/frame-001/source.png',
-        annotated: 'frames/frame-001/annotated.png',
-        overlaySvg: 'frames/frame-001/overlay.svg',
-        viewport: capture.viewport,
-        scroll: capture.scroll,
-        capturedAt: capture.capturedAt,
-      },
-      groups: store.getGroups(),
-      marks: store.getMarks(),
-      targets,
-      globalNote,
-    });
+    const task = parentTaskId
+      ? createRevision({
+          newTaskId: taskId,
+          parentTask: await readTaskBundle(session.workspaceRoot, parentTaskId),
+          frame,
+          groups: store.getGroups(),
+          marks: store.getMarks(),
+          targets,
+          globalNote,
+        })
+      : assembleVisualTask({
+          taskId,
+          sessionId,
+          workspaceRoot: session.workspaceRoot,
+          frame,
+          groups: store.getGroups(),
+          marks: store.getMarks(),
+          targets,
+          globalNote,
+        });
 
     await writeTaskBundle(session.workspaceRoot, task, [
       { relativePath: 'frames/frame-001/source.png', content: capture.screenshot },

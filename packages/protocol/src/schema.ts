@@ -200,6 +200,14 @@ export const visualTaskSchema = z.object({
   id: z.string().min(1),
   sessionId: z.string().min(1),
   revision: z.number().int().nonnegative(),
+  /**
+   * Links a review revision back to the task it was created from
+   * (docs/IMPLEMENTATION_PLAN.md Phase 6: "revision history와 parent task
+   * 연결"). Undefined for the first (revision 0) task of a session. Each
+   * revision is written as an entirely new, immutable task bundle — the
+   * parent's frames/marks/targets are never mutated in place.
+   */
+  parentTaskId: z.string().min(1).optional(),
   state: taskStateSchema,
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
