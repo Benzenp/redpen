@@ -10,4 +10,5 @@ apps/annotator/public/client.bundle.js
 apps/cli/.lifecycle-output/
 apps/cli/.mcp-output-report.json
 apps/cli/.review-loop-output/
+fixtures/demo-app/.preview.png
 .gjc/

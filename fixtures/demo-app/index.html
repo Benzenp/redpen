@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>Acme Admin — Redpen 데모용 대시보드</title>
+  <style>
+    :root {
+      --bg: #f4f5f7;
+      --card: #ffffff;
+      --border: #e2e4e9;
+      --text: #1f2430;
+      --muted: #6b7280;
+      --primary: #2563eb;
+      --primary-dark: #1d4ed8;
+      --danger: #dc2626;
+      --success: #16a34a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+    }
+    header .brand {
+      font-weight: 700;
+      font-size: 18px;
+    }
+    header nav {
+      display: flex;
+      gap: 20px;
+    }
+    header nav a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+    }
+    header nav a.active {
+      color: var(--text);
+      font-weight: 600;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      min-height: calc(100vh - 65px);
+    }
+    aside {
+      background: var(--card);
+      border-right: 1px solid var(--border);
+      padding: 20px 12px;
+    }
+    aside .menu-item {
+      display: block;
+      padding: 10px 12px;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 4px;
+      cursor: pointer;
+    }
+    aside .menu-item.active {
+      background: #eef2ff;
+      color: var(--primary-dark);
+      font-weight: 600;
+    }
+    main {
+      padding: 28px;
+    }
+    .page-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    .page-title h1 {
+      font-size: 22px;
+      margin: 0;
+    }
+    .btn {
+      border: none;
+      border-radius: 6px;
+      padding: 9px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+    .btn-outline {
+      background: white;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-danger {
+      background: var(--danger);
+      color: white;
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .stat-card .label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .stat-card .value {
+      font-size: 26px;
+      font-weight: 700;
+      margin-top: 4px;
+    }
+    .stat-card .delta {
+      font-size: 12px;
+      margin-top: 6px;
+    }
+    .delta.up { color: var(--success); }
+    .delta.down { color: var(--danger); }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    .panel h2 {
+      font-size: 16px;
+      margin: 0 0 16px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .badge-success { background: #dcfce7; color: #166534; }
+    .badge-warning { background: #fef3c7; color: #92400e; }
+    .badge-danger { background: #fee2e2; color: #991b1b; }
+    .row-actions button {
+      background: none;
+      border: none;
+      color: var(--primary);
+      cursor: pointer;
+      font-size: 13px;
+      margin-right: 8px;
+    }
+    .settings-form {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      max-width: 560px;
+    }
+    .settings-form label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .settings-form input, .settings-form select {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .empty-panel {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 32px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    footer {
+      padding: 16px 24px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">🍁 Acme Admin</div>
+    <nav>
+      <a href="#" class="active">대시보드</a>
+      <a href="#">고객</a>
+      <a href="#">결제</a>
+      <a href="#">설정</a>
+    </nav>
+    <button class="btn btn-outline" id="profile-button" data-testid="profile-button">huia_paek ▾</button>
+  </header>
+
+  <div class="layout">
+    <aside>
+      <div class="menu-item active" data-testid="menu-dashboard">📊 대시보드</div>
+      <div class="menu-item" data-testid="menu-customers">👥 고객</div>
+      <div class="menu-item" data-testid="menu-invoices">🧾 인보이스</div>
+      <div class="menu-item" data-testid="menu-reports">📈 리포트</div>
+      <div class="menu-item" data-testid="menu-settings">⚙️ 설정</div>
+    </aside>
+
+    <main>
+      <div class="page-title">
+        <h1>대시보드</h1>
+        <div>
+          <button class="btn btn-outline" data-testid="export-button">내보내기</button>
+          <button class="btn btn-primary" data-testid="new-invoice-button">+ 새 인보이스</button>
+        </div>
+      </div>
+
+      <section class="stat-grid" data-testid="stat-grid">
+        <div class="stat-card" data-testid="stat-revenue">
+          <div class="label">이번 달 매출</div>
+          <div class="value">₩48,290,000</div>
+          <div class="delta up">▲ 12.4% 전월 대비</div>
+        </div>
+        <div class="stat-card" data-testid="stat-customers">
+          <div class="label">활성 고객</div>
+          <div class="value">1,204</div>
+          <div class="delta up">▲ 3.1%</div>
+        </div>
+        <div class="stat-card" data-testid="stat-churn">
+          <div class="label">이탈률</div>
+          <div class="value">2.8%</div>
+          <div class="delta down">▼ 0.4%p</div>
+        </div>
+        <div class="stat-card" data-testid="stat-pending">
+          <div class="label">미결제 인보이스</div>
+          <div class="value">7건</div>
+          <div class="delta">₩3,120,000</div>
+        </div>
+      </section>
+
+      <section class="panel" data-testid="recent-invoices-panel">
+        <h2>최근 인보이스</h2>
+        <table data-testid="invoices-table">
+          <thead>
+            <tr>
+              <th>인보이스</th>
+              <th>고객</th>
+              <th>금액</th>
+              <th>상태</th>
+              <th>날짜</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-testid="invoice-row-1">
+              <td>#INV-1042</td>
+              <td>정다혜</td>
+              <td>₩1,290,000</td>
+              <td><span class="badge badge-success">결제완료</span></td>
+              <td>2026-08-28</td>
+              <td class="row-actions"><button>보기</button><button>영수증</button></td>
+            </tr>
+            <tr data-testid="invoice-row-2">
+              <td>#INV-1041</td>
+              <td>이서준</td>
+              <td>₩420,000</td>
+              <td><span class="badge badge-warning">대기중</span></td>
+              <td>2026-08-27</td>
+              <td class="row-actions"><button>보기</button><button>알림 보내기</button></td>
+            </tr>
+            <tr data-testid="invoice-row-3">
+              <td>#INV-1040</td>
+              <td>박지우</td>
+              <td>₩980,000</td>
+              <td><span class="badge badge-danger">연체</span></td>
+              <td>2026-08-20</td>
+              <td class="row-actions"><button>보기</button><button>독촉</button></td>
+            </tr>
+            <tr data-testid="invoice-row-4">
+              <td>#INV-1039</td>
+              <td>최윤아</td>
+              <td>₩2,150,000</td>
+              <td><span class="badge badge-success">결제완료</span></td>
+              <td>2026-08-19</td>
+              <td class="row-actions"><button>보기</button><button>영수증</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel" data-testid="settings-panel">
+        <h2>알림 설정</h2>
+        <div class="settings-form">
+          <div>
+            <label for="notify-email">알림 이메일</label>
+            <input id="notify-email" type="email" value="huia_paek@acme.test" data-testid="notify-email-input" />
+          </div>
+          <div>
+            <label for="notify-freq">알림 빈도</label>
+            <select id="notify-freq" data-testid="notify-freq-select">
+              <option>즉시</option>
+              <option selected>매일</option>
+              <option>매주</option>
+            </select>
+          </div>
+          <div>
+            <label for="notify-pw">API 키 (더미)</label>
+            <input id="notify-pw" type="password" value="sk-demo-not-a-real-key" data-testid="api-key-input" />
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button class="btn btn-primary" data-testid="save-settings-button">저장</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" data-testid="empty-widget-panel">
+        <h2>빈 위젯 영역</h2>
+        <div class="empty-panel" data-testid="empty-widget-placeholder">
+          여기에 새 위젯을 그려서 추가해보세요 (빈 영역 스케치 테스트용)
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>Acme Admin Demo · Redpen 테스트용 fixture · 실제 서비스 아님</footer>
+</body>
+</html>
