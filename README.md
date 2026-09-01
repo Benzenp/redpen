@@ -42,6 +42,34 @@ Submission is not implementation approval. The task remains `submitted` until th
 
 Redpen installs its dedicated Playwright Chromium during package installation.
 
+## Install
+
+Install the latest GitHub release globally:
+
+```bash
+npm install -g https://github.com/Benzenp/redpen/releases/download/v0.1.0/redpen-cli-0.1.0.tgz
+```
+
+Verify the daemon:
+
+```bash
+redpen daemon start
+redpen daemon status
+redpen daemon stop
+```
+
+For a Vue/Vite project:
+
+```bash
+cd your-vue-project
+npm run dev
+redpen open http://localhost:5173 --project .
+```
+
+Run the dev server and `redpen open` in separate terminals. The Node daemon
+runs as a hidden background process on Windows while Chromium remains visible.
+Press **F9** in Chromium to capture and annotate the current page.
+
 ## Run from source
 
 ```bash
