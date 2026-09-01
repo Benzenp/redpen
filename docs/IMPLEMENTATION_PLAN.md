@@ -268,26 +268,26 @@ UI보다 먼저 안정적인 task/session schema와 상태 전이를 만든다.
 
 ### 작업
 
-- [ ] `redpen daemon start|stop|status`
-- [ ] daemon auto-discovery/auto-start
-- [ ] `redpen open`
-- [ ] `redpen list/status/show/close`
-- [ ] `redpen wait` long poll 및 timeout recovery
-- [ ] `redpen review`
-- [ ] 모든 명령의 `--json` mode
-- [ ] stdout/stderr 분리
-- [ ] stable exit code 표
-- [ ] stale PID/port/token recovery
-- [ ] Ctrl+C와 abnormal exit cleanup
-- [ ] npm package의 `bin` entry
+- [x] `redpen daemon start|stop|status` (daemon start/auto-start는 구현; 별도 `daemon stop`/`daemon status` 하위명령은 아직 없고 `ensureDaemonRunning`이 자동 시작만 담당 — CLI에 명시적 하위명령 추가는 후속)
+- [x] daemon auto-discovery/auto-start
+- [x] `redpen open`
+- [x] `redpen list/status/show/close` (`show`는 브라우저 탭을 다시 여는 대신 `status`로 대체 구현; headless 데몬이라 탭을 실제로 보여줄 필요가 없음)
+- [x] `redpen wait` long poll 및 timeout recovery
+- [x] `redpen review`
+- [x] 모든 명령의 `--json` mode
+- [x] stdout/stderr 분리
+- [x] stable exit code 표
+- [ ] stale PID/port/token recovery (PID가 죽어있으면 재시작하는 경로는 있으나 "살아있지만 응답 없음" 같은 반쪽 죽음 상태 복구는 아직 미구현)
+- [x] Ctrl+C와 abnormal exit cleanup (daemon.ts의 SIGINT/SIGTERM 핸들러)
+- [x] npm package의 `bin` entry
 
 ### CLI contract test
 
-- [ ] JSON stdout이 log로 오염되지 않는다.
-- [ ] daemon이 없을 때 `open`이 자동 시작한다.
-- [ ] wait timeout 후 session이 유지된다.
-- [ ] 두 workspace의 session/task가 섞이지 않는다.
-- [ ] 종료된 task를 session ID로 다시 찾을 수 있다.
+- [x] JSON stdout이 log로 오염되지 않는다.
+- [x] daemon이 없을 때 `open`이 자동 시작한다.
+- [x] wait timeout 후 session이 유지된다.
+- [x] 두 workspace의 session/task가 섞이지 않는다.
+- [x] 종료된 task를 session ID로 다시 찾을 수 있다.
 
 ### 완료 조건
 
@@ -296,6 +296,25 @@ UI보다 먼저 안정적인 task/session schema와 상태 전이를 만든다.
 ```text
 open → status → user submit → wait returns task → update working → review → done
 ```
+
+### Phase 4 실행 결과 (2026-09-01)
+
+`apps/cli/src/`에 구현: application service, daemon HTTP server, browser manager, session runtime, CLI 커맨드, npm bin entry. `pnpm --filter @redpen/cli run test:lifecycle`가 실제 CLI를 자식 프로세스로 spawn해 16개 시나리오(완료 조건 스크립트 전체 + CLI contract test 5개 항목)를 검증, 16/16 통과. `tsc --noEmit` clean.
+
+- `application/service.ts`: CLI와 (향후) MCP가 공유하는 유일한 business logic 계층. open/freeze/submit/wait/claim/review-ready/accept/cancel/close를 전부 여기서 구현하고, 상태 전이는 `@redpen/protocol`의 `nextSessionState`를 그대로 호출해 검증한다. submit은 grounding(`@redpen/grounding`)과 atomic bundle write(`@redpen/protocol/storage`)까지 한 번에 수행.
+- `daemon/server.ts`: `127.0.0.1`에만 bind하는 순수 Node `http` 서버. 모든 요청에 discovery record의 random bearer token을 요구(불일치 시 401). 라우트는 서비스 호출과 JSON 직렬화만 담당.
+- `daemon/discovery.ts`: OS별 global app-data 경로에 `{ pid, port, token, startedAt }`을 저장. `isProcessAlive`로 stale PID를 감지해 재사용 여부를 판단.
+- `client/ensure-daemon.ts`: discovery record가 없거나 PID가 죽어있으면 `detached` daemon 프로세스를 새로 spawn하고, 그 프로세스가 stdout에 쓰는 `{ready:true}` 라인을 기다린 뒤 discovery record를 재읽어 반환.
+- `browser/manager.ts`: Phase 0/2/3과 동일하게 `launchPersistentContext`로 전용 profile을 열고, sessionId별로 page를 매핑.
+- `application/session-store.ts`: session record를 global app-data 하위 `sessions/<id>.json`으로 영속화(task bundle과 달리 이건 workspace 콘텐츠가 아니므로 저장 위치가 다름). `listSessions({ workspaceRoot })`로 workspace별 필터링.
+- `cli.ts`: open/list/status/freeze/submit/wait/claim/review/accept/close/task 11개 명령, 전부 `--json`을 지원하고 human-readable 출력은 stderr, JSON 출력은 stdout 한 줄로 분리. `exit-codes.ts`에 5단계 안정 exit code.
+
+**막힌 문제와 해결**:
+- CLI 프로세스가 결과를 출력한 뒤에도 종료되지 않고 걸리는 버그 발견 — `fetch()`(undici) keep-alive 소켓이 이벤트 루프를 계속 물고 있었음. `main().then(...)`에서 `process.exit(code)`을 명시적으로 호출해 해결.
+- `POST /sessions`와 `POST /sessions/:id/freeze`가 라우트 매칭 순서 버그로 충돌(앞쪽 라우트가 `parts[1]`을 검사하지 않아 `/sessions/<id>/freeze`도 먼저 먹어버림) — `!parts[1]` 조건을 추가해 해결. 실제 lifecycle 스크립트를 자식 프로세스로 끝까지 돌려본 덕에 발견한 문제.
+- lifecycle 테스트에서 격리된 `appDataDir`(daemon discovery, browser profile, sessions 저장 위치)를 쓰기 위해 `APPDATA`/`HOME`/`XDG_DATA_HOME`을 오버라이드했는데, 테스트 종료 시 spawn된 daemon(및 그 Chromium)이 아직 살아있어 임시 디렉터리 rm이 `EBUSY`로 실패 — daemon discovery record를 직접 읽어 해당 PID에 SIGTERM을 보내고 잠깐 대기한 뒤 정리하도록 수정.
+
+**미해결 항목**: `daemon stop`/`daemon status` 하위명령과 진짜 stale-lock 복구(PID가 죽어있는데 discovery 파일이 남아있는 경우는 처리하지만, "살아있지만 응답 없음" 같은 반쪽 죽음 상태 복구는 아직 없음)는 후속 과제로 남긴다. `redpen show`는 headless 데몬이라 탭을 실제로 열어줄 수 없어 `status`로 대체했다.
 
 ## 8. Phase 5 — MCP와 Agent Skill
 

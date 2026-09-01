@@ -35,6 +35,15 @@ importers:
 
   apps/cli:
     dependencies:
+      '@redpen/annotator-core':
+        specifier: workspace:*
+        version: link:../../packages/annotator-core
+      '@redpen/grounding':
+        specifier: workspace:*
+        version: link:../../packages/grounding
+      '@redpen/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       playwright:
         specifier: ^1.48.0
         version: 1.62.1

@@ -3,11 +3,18 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "bin": {
+    "redpen": "./bin/redpen.mjs"
+  },
   "scripts": {
     "spike:capture": "tsx src/spike/capture-spike.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:lifecycle": "tsx src/lifecycle-check.ts"
   },
   "dependencies": {
+    "@redpen/annotator-core": "workspace:*",
+    "@redpen/grounding": "workspace:*",
+    "@redpen/protocol": "workspace:*",
     "playwright": "^1.48.0"
   },
   "devDependencies": {
