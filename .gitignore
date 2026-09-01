@@ -16,3 +16,4 @@ apps/annotator/public/session.bundle.js
 fixtures/demo-app/.preview.png
 fixtures/demo-app/.ui-preview.png
 .gjc/
+taskhistory/
