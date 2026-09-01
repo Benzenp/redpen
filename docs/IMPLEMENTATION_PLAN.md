@@ -268,7 +268,7 @@ UI보다 먼저 안정적인 task/session schema와 상태 전이를 만든다.
 
 ### 작업
 
-- [x] `redpen daemon start|stop|status` (daemon start/auto-start는 구현; 별도 `daemon stop`/`daemon status` 하위명령은 아직 없고 `ensureDaemonRunning`이 자동 시작만 담당 — CLI에 명시적 하위명령 추가는 후속)
+- [x] `redpen daemon start|stop|status` (전부 구현. `daemon start`는 이미 떠 있으면 같은 pid를 재사용하고, `daemon stop`은 SIGTERM 후 discovery record를 지우고, `daemon status`는 아래 health probe 결과를 반환)
 - [x] daemon auto-discovery/auto-start
 - [x] `redpen open`
 - [x] `redpen list/status/show/close` (`show`는 브라우저 탭을 다시 여는 대신 `status`로 대체 구현; headless 데몬이라 탭을 실제로 보여줄 필요가 없음)
@@ -314,7 +314,17 @@ open → status → user submit → wait returns task → update working → rev
 - `POST /sessions`와 `POST /sessions/:id/freeze`가 라우트 매칭 순서 버그로 충돌(앞쪽 라우트가 `parts[1]`을 검사하지 않아 `/sessions/<id>/freeze`도 먼저 먹어버림) — `!parts[1]` 조건을 추가해 해결. 실제 lifecycle 스크립트를 자식 프로세스로 끝까지 돌려본 덕에 발견한 문제.
 - lifecycle 테스트에서 격리된 `appDataDir`(daemon discovery, browser profile, sessions 저장 위치)를 쓰기 위해 `APPDATA`/`HOME`/`XDG_DATA_HOME`을 오버라이드했는데, 테스트 종료 시 spawn된 daemon(및 그 Chromium)이 아직 살아있어 임시 디렉터리 rm이 `EBUSY`로 실패 — daemon discovery record를 직접 읽어 해당 PID에 SIGTERM을 보내고 잠깐 대기한 뒤 정리하도록 수정.
 
-**미해결 항목**: `daemon stop`/`daemon status` 하위명령과 진짜 stale-lock 복구(PID가 죽어있는데 discovery 파일이 남아있는 경우는 처리하지만, "살아있지만 응답 없음" 같은 반쪽 죽음 상태 복구는 아직 없음)는 후속 과제로 남긴다. `redpen show`는 headless 데몬이라 탭을 실제로 열어줄 수 없어 `status`로 대체했다.
+**미해결 항목 해소 (2026-09-01 후속)**: `daemon stop`/`daemon status` 하위명령과 반쪽 죽음(alive-but-unresponsive) 복구를 추가로 구현했다.
+
+- `daemon/discovery.ts`의 `probeDaemonHealth()`: PID가 죽어있으면 `stale-pid`, PID는 살아있지만 `/health`가 응답하지 않으면 `hung`, 정상 응답하면 `running`, discovery record 자체가 없으면 `not-running`을 반환한다.
+- `redpen daemon start`: 이미 떠 있으면(health=running) 같은 pid를 그대로 반환(idempotent), 아니면 새로 띄운다.
+- `redpen daemon status`: health를 그대로 JSON으로 반환하고, `running`이 아니면 exit code `DAEMON_UNAVAILABLE(5)`을 반환한다.
+- `redpen daemon stop`: discovery record의 pid에 SIGTERM을 보내고 discovery record를 지운다.
+- `client/ensure-daemon.ts`의 `ensureDaemonRunning()`: PID가 죽어있으면 즉시 재시작, PID가 살아있는데 health probe가 `hung`이면 먼저 SIGTERM으로 죽이고 discovery record를 지운 뒤 새로 띄운다 — 반쪽 죽음 상태에서도 `redpen open` 등 일반 명령이 자동 복구된다.
+
+**막힌 문제와 해결**: health probe를 처음에 전역 `fetch`(undici)로 구현했더니, CLI 명령(예: `status <session-id>`)이 probe용 fetch 한 번 + 실제 요청용 fetch 한 번을 같은 프로세스에서 연달아 호출한 뒤 `process.exit()`를 부르면 Windows에서 `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c`로 크래시했다(undici 커넥션 풀 handle이 강제 종료 시점에 아직 정리 중이었던 것으로 보임). `AbortController`를 안 쓰는 버전으로 바꿔도 동일하게 재현됨을 확인해 원인이 abort가 아니라 "짧은 프로세스에서 undici fetch 2회 + 강제 exit" 조합 자체임을 특정했다. 해결: health probe만 `node:http`의 `http.request`로 바꿔 undici 커넥션 풀을 전혀 거치지 않게 했다 — 실제 세션/태스크 요청은 여전히 `fetch`를 쓰지만 이제 프로세스당 undici 요청이 최대 1번만 발생한다. `apps/cli/src/daemon-lifecycle-check.ts`로 daemon start/stop/status idempotency, hung-daemon 감지, hung 상태에서 `open`이 실제로 복구되는지(SIGTERM 후 새 pid로 재시작)까지 11/11 통과 확인했고, 기존 `test:lifecycle` 16/16도 회귀 없이 재통과시켰다.
+
+**여전히 미해결**: `redpen show`는 headless 데몬이라 탭을 실제로 열어줄 수 없어 `status`로 대체했다(UI 자체가 없으므로 이 우회는 유지).
 
 ## 8. Phase 5 — MCP와 Agent Skill
 

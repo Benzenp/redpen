@@ -7,6 +7,7 @@
  * auto-starts a new daemon.
  */
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import { daemonDiscoveryFilePath, globalAppDataDir } from '@redpen/protocol/paths';
 
 export interface DaemonDiscovery {
@@ -44,4 +45,45 @@ export function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+export type DaemonHealth = 'running' | 'stale-pid' | 'hung' | 'not-running';
+
+/**
+ * Distinguishes a genuinely running daemon from a "half-dead" one: the PID
+ * can be alive (survived a crash into a hung state, or belongs to a reused
+ * PID from an unrelated process) while the HTTP server no longer answers.
+ * `redpen daemon status` and `ensureDaemonRunning()` both use this instead
+ * of relying on `isProcessAlive` alone.
+ */
+export async function probeDaemonHealth(discovery: DaemonDiscovery | null, timeoutMs = 2000): Promise<DaemonHealth> {
+  if (!discovery) return 'not-running';
+  if (!isProcessAlive(discovery.pid)) return 'stale-pid';
+
+  // Uses node:http directly (not the global fetch/undici) so this probe
+  // never shares undici's connection pool with the CLI's real request that
+  // follows right after (see client/ensure-daemon.ts for why: two undici
+  // requests in one short-lived process followed by process.exit() crashes
+  // with a libuv assertion on Windows).
+  const ok = await new Promise<boolean>((resolve) => {
+    const req = httpRequest(
+      {
+        host: '127.0.0.1',
+        port: discovery.port,
+        path: '/health',
+        method: 'GET',
+        headers: { Authorization: `Bearer ${discovery.token}` },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        res.resume(); // drain and discard the body
+        resolve((res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300);
+      },
+    );
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve(false));
+    req.end();
+  });
+
+  return ok ? 'running' : 'hung';
 }

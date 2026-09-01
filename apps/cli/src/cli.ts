@@ -7,6 +7,8 @@
  * - IDs and paths are never truncated.
  */
 import { DaemonClient, DaemonRequestError } from './client/daemon-client.js';
+import { ensureDaemonRunning } from './client/ensure-daemon.js';
+import { readDaemonDiscovery, probeDaemonHealth, clearDaemonDiscovery } from './daemon/discovery.js';
 import { EXIT_CODES } from './exit-codes.js';
 
 function hasFlag(args: string[], name: string): boolean {
@@ -142,6 +144,45 @@ async function main(): Promise<number> {
         return EXIT_CODES.OK;
       }
 
+      case 'daemon': {
+        const sub = rest[0];
+        switch (sub) {
+          case 'start': {
+            const discovery = await ensureDaemonRunning();
+            if (json) printJson({ ...discovery, started: true });
+            else printHuman(`daemon running: pid=${discovery.pid} port=${discovery.port}`);
+            return EXIT_CODES.OK;
+          }
+          case 'status': {
+            const discovery = await readDaemonDiscovery();
+            const health = await probeDaemonHealth(discovery);
+            if (json) printJson({ health, discovery });
+            else printHuman(discovery ? `daemon ${health}: pid=${discovery.pid} port=${discovery.port}` : 'daemon not-running');
+            return health === 'running' ? EXIT_CODES.OK : EXIT_CODES.DAEMON_UNAVAILABLE;
+          }
+          case 'stop': {
+            const discovery = await readDaemonDiscovery();
+            if (!discovery) {
+              if (json) printJson({ stopped: false, reason: 'not-running' });
+              else printHuman('daemon not-running');
+              return EXIT_CODES.OK;
+            }
+            try {
+              process.kill(discovery.pid, 'SIGTERM');
+            } catch {
+              // already dead; fall through to clearing the stale record.
+            }
+            await clearDaemonDiscovery();
+            if (json) printJson({ stopped: true, pid: discovery.pid });
+            else printHuman(`daemon stopped: pid=${discovery.pid}`);
+            return EXIT_CODES.OK;
+          }
+          default:
+            printHuman('usage: redpen daemon <start|stop|status> [--json]');
+            return EXIT_CODES.USAGE_ERROR;
+        }
+      }
+
       case 'mcp': {
         const { runMcpServer } = await import('./mcp/server.js');
         await runMcpServer();
@@ -153,7 +194,7 @@ async function main(): Promise<number> {
 
       default:
         printHuman(
-          'usage: redpen <open|list|status|freeze|submit|wait|claim|review|accept|close|task|mcp> [...] [--json] [--project <path>]',
+          'usage: redpen <daemon|open|list|status|freeze|submit|wait|claim|review|accept|close|task|mcp> [...] [--json] [--project <path>]',
         );
         return EXIT_CODES.USAGE_ERROR;
     }

@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { readDaemonDiscovery, isProcessAlive, type DaemonDiscovery } from '../daemon/discovery.js';
+import { readDaemonDiscovery, isProcessAlive, probeDaemonHealth, clearDaemonDiscovery, type DaemonDiscovery } from '../daemon/discovery.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const daemonEntry = path.resolve(__dirname, '../daemon/main.ts');
@@ -18,10 +18,38 @@ const tsxCliPath = require.resolve('tsx/cli');
 
 export async function ensureDaemonRunning(): Promise<DaemonDiscovery> {
   const existing = await readDaemonDiscovery();
-  if (existing && isProcessAlive(existing.pid)) {
+  if (!existing) {
+    return spawnDaemon();
+  }
+  if (!isProcessAlive(existing.pid)) {
+    await clearDaemonDiscovery();
+    return spawnDaemon();
+  }
+
+  // PID is alive; still need to distinguish a genuinely running daemon from
+  // a hung one (docs/IMPLEMENTATION_PLAN.md's "stale-lock 복구" gap: alive
+  // PID + unresponsive port). `probeDaemonHealth` deliberately probes via
+  // `node:http` rather than `fetch`/undici, because every CLI command that
+  // reaches this point goes on to make its own real request via `fetch`
+  // and then calls `process.exit()`; two undici requests in the same
+  // short-lived process followed by a forced exit reliably crashes with a
+  // libuv assertion on Windows ("Assertion failed:
+  // !(handle->flags & UV_HANDLE_CLOSING)", src/win/async.c). Keeping the
+  // probe off undici's connection pool avoids that interaction entirely.
+  const health = await probeDaemonHealth(existing);
+  if (health === 'running') {
     return existing;
   }
 
+  if (health === 'hung') {
+    try {
+      process.kill(existing.pid, 'SIGTERM');
+    } catch {
+      // already gone between the health probe and here; ignore.
+    }
+  }
+
+  await clearDaemonDiscovery();
   return spawnDaemon();
 }
 
