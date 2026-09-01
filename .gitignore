@@ -11,5 +11,7 @@ apps/cli/.lifecycle-output/
 apps/cli/.mcp-output-report.json
 apps/cli/.review-loop-output/
 apps/cli/.daemon-lifecycle-output/
+apps/cli/.ui-e2e-output/
+apps/annotator/public/session.bundle.js
 fixtures/demo-app/.preview.png
 .gjc/

@@ -9,10 +9,24 @@
  */
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { RedpenApplicationService } from '../application/service.js';
 import { SessionNotFoundError, TaskNotFoundError, NoActiveCaptureError } from '../application/errors.js';
 import { UnsupportedUrlError } from '../application/url-policy.js';
 import { InvalidSessionTransitionError } from '@redpen/protocol/state-machine';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// apps/cli/src/daemon -> apps/annotator/public. Resolved at runtime (not
+// bundled) since these are static assets the daemon reads off disk.
+const annotatorPublicDir = path.resolve(__dirname, '../../../annotator/public');
+
+const STATIC_CONTENT_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript',
+  '.png': 'image/png',
+};
 
 export interface StartedDaemon {
   server: Server;
@@ -47,17 +61,49 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
     };
 
     try {
-      const auth = req.headers.authorization ?? '';
-      if (auth !== `Bearer ${token}`) {
-        send(401, { error: 'unauthorized' });
-        return;
-      }
-
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       const parts = url.pathname.split('/').filter(Boolean);
 
       if (req.method === 'GET' && parts[0] === 'health') {
+        // No auth required: this is the liveness probe ensure-daemon.ts and
+        // probeDaemonHealth() use precisely to tell a live-but-wrong-token
+        // daemon apart from a genuinely dead one.
         send(200, { ok: true });
+        return;
+      }
+
+      // The bundled annotator JS is static, session-independent code \u2014
+      // serving it without auth lets the browser tab load
+      // <script src="/session.bundle.js"> as a normal same-origin request
+      // (it cannot attach an Authorization header or a query string to a
+      // <script> tag's src). It never reveals anything session-specific.
+      if (req.method === 'GET' && parts[0] === 'session.bundle.js') {
+        const js = await readFile(path.join(annotatorPublicDir, 'session.bundle.js'));
+        res.writeHead(200, { 'Content-Type': STATIC_CONTENT_TYPES['.js'] });
+        res.end(js);
+        return;
+      }
+
+      // The annotation UI is opened as a real browser tab (docs/ARCHITECTURE.md
+      // \u00a74.2) which cannot attach an Authorization header to top-level
+      // navigation or <img> requests, so its session-specific routes accept
+      // the token as a query parameter instead. Every other route still
+      // requires the header.
+      const isBrowserTabRoute =
+        req.method === 'GET' &&
+        (parts[0] === 'annotator' || (parts[0] === 'api' && parts[1] === 'sessions' && parts[3] === 'annotator' && parts[4] === 'screenshot'));
+      const auth = req.headers.authorization ?? '';
+      const queryToken = url.searchParams.get('token');
+      const authorized = isBrowserTabRoute ? queryToken === token : auth === `Bearer ${token}`;
+      if (!authorized) {
+        send(401, { error: 'unauthorized' });
+        return;
+      }
+
+      if (req.method === 'GET' && parts[0] === 'annotator' && parts[1]) {
+        const html = await readFile(path.join(annotatorPublicDir, 'session.html'), 'utf8');
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(html);
         return;
       }
 
@@ -131,6 +177,80 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
         return;
       }
 
+      // --- Annotation UI API: /api/sessions/:id/annotator/* ---
+      if (parts[0] === 'api' && parts[1] === 'sessions' && parts[2] && parts[3] === 'annotator') {
+        const sessionId = parts[2];
+        const sub = parts.slice(4);
+
+        if (req.method === 'GET' && sub.length === 1 && sub[0] === 'screenshot') {
+          const screenshot = service.getCaptureScreenshot(sessionId);
+          res.writeHead(200, { 'Content-Type': 'image/png' });
+          res.end(screenshot);
+          return;
+        }
+
+        if (req.method === 'GET' && sub.length === 0) {
+          send(200, service.getAnnotatorState(sessionId));
+          return;
+        }
+
+        if (req.method === 'POST' && sub.length === 1 && sub[0] === 'marks') {
+          const body = (await readJsonBody(req)) as Parameters<typeof service.addMark>[1];
+          const mark = service.addMark(sessionId, body);
+          send(200, { mark });
+          return;
+        }
+
+        if (req.method === 'DELETE' && sub.length === 2 && sub[0] === 'marks') {
+          service.removeMark(sessionId, sub[1]);
+          send(200, { ok: true });
+          return;
+        }
+
+        if (req.method === 'POST' && sub.length === 1 && sub[0] === 'undo') {
+          send(200, { undone: service.undoAnnotation(sessionId) });
+          return;
+        }
+
+        if (req.method === 'POST' && sub.length === 1 && sub[0] === 'redo') {
+          send(200, { redone: service.redoAnnotation(sessionId) });
+          return;
+        }
+
+        if (req.method === 'POST' && sub.length === 1 && sub[0] === 'groups') {
+          const group = service.createAnnotationGroup(sessionId);
+          send(200, { group });
+          return;
+        }
+
+        if (req.method === 'POST' && sub.length === 1 && sub[0] === 'active-group') {
+          const body = (await readJsonBody(req)) as { groupId: string };
+          service.setActiveAnnotationGroup(sessionId, body.groupId);
+          send(200, { ok: true });
+          return;
+        }
+
+        if (req.method === 'POST' && sub.length === 3 && sub[0] === 'groups' && sub[2] === 'note') {
+          const body = (await readJsonBody(req)) as { note?: string };
+          service.setAnnotationGroupNote(sessionId, sub[1], body.note);
+          send(200, { ok: true });
+          return;
+        }
+
+        if (req.method === 'POST' && sub.length === 1 && sub[0] === 'global-note') {
+          const body = (await readJsonBody(req)) as { note?: string };
+          service.setGlobalNote(sessionId, body.note);
+          send(200, { ok: true });
+          return;
+        }
+
+        if (req.method === 'POST' && sub.length === 1 && sub[0] === 'submit') {
+          const result = await service.submit(sessionId);
+          send(200, { taskId: result.taskId });
+          return;
+        }
+      }
+
       if (req.method === 'GET' && parts[0] === 'tasks' && parts[1]) {
         const workspaceRoot = url.searchParams.get('workspaceRoot') ?? '';
         const task = await service.getTask(workspaceRoot, parts[1]);
@@ -154,6 +274,7 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
   await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   const actualPort = typeof address === 'object' && address ? address.port : port;
+  service.setSelfOrigin({ port: actualPort, token });
 
   return {
     server,

@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>Redpen — 화면에 지시 그리기</title>
+  <style>
+    html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; overflow: hidden; }
+    #app { display: flex; height: 100%; }
+    #canvas-area { flex: 1; position: relative; background: #2b2d31; overflow: hidden; }
+    #screenshot-source { display: none; }
+    canvas { display: block; touch-action: none; cursor: crosshair; }
+    #toolbar {
+      position: absolute; top: 12px; left: 12px; display: flex; gap: 4px;
+      background: white; border-radius: 8px; padding: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.2);
+      z-index: 5;
+    }
+    #toolbar button {
+      border: none; background: #f4f4f5; border-radius: 6px; padding: 8px 10px; cursor: pointer; font-size: 16px;
+    }
+    #toolbar button.active { background: #2563eb; color: white; }
+    #sidebar { width: 300px; background: #fafafa; border-left: 1px solid #e2e4e9; padding: 16px; overflow-y: auto; }
+    #sidebar h2 { font-size: 15px; margin: 0 0 10px; }
+    .group-card {
+      border: 2px solid #ccc; border-radius: 8px; padding: 10px; margin-bottom: 10px; cursor: pointer; background: white;
+    }
+    .group-card.active { outline: 3px solid #111; }
+    .group-card .title { font-weight: 700; margin-bottom: 6px; }
+    .group-card textarea {
+      width: 100%; box-sizing: border-box; resize: vertical; min-height: 40px; font-size: 13px;
+      border: 1px solid #ddd; border-radius: 4px; padding: 6px;
+    }
+    .group-card .empty-warning { color: #dc2626; font-size: 12px; margin-top: 4px; }
+    #new-instruction { width: 100%; padding: 10px; margin-bottom: 16px; border: 1px dashed #999; background: white; border-radius: 6px; cursor: pointer; }
+    #global-note { width: 100%; box-sizing: border-box; min-height: 60px; margin-bottom: 16px; padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
+    #submit-button { width: 100%; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 14px; }
+    #submit-button:disabled { background: #9ca3af; cursor: not-allowed; }
+    #submit-status { margin-top: 10px; font-size: 13px; color: #16a34a; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="canvas-area">
+      <img id="screenshot-source" alt="" />
+      <canvas id="annotation-canvas"></canvas>
+      <div id="toolbar">
+        <button data-tool="pen" title="펜">✏️</button>
+        <button data-tool="arrow" title="화살표">↗️</button>
+        <button data-tool="rectangle" title="사각형">▭</button>
+        <button data-tool="ellipse" title="원">◯</button>
+        <button data-tool="text" title="텍스트">T</button>
+        <button data-tool="mask" title="가리기">▪️</button>
+      </div>
+    </div>
+    <div id="sidebar">
+      <h2>지시 그룹</h2>
+      <button id="new-instruction">+ 새 지시</button>
+      <div id="group-cards"></div>
+      <h2>전체 설명 (선택)</h2>
+      <textarea id="global-note" placeholder="전체적으로 하고 싶은 말..."></textarea>
+      <button id="undo-button">↶ undo</button>
+      <button id="redo-button">↷ redo</button>
+      <button id="submit-button">지시 제출</button>
+      <div id="submit-status"></div>
+    </div>
+  </div>
+  <script src="/session.bundle.js"></script>
+  <script>
+    // Reads sessionId + token from the URL the daemon opened this tab with
+    // (freeze() constructs /annotator/:sessionId?token=...).
+    const params = new URLSearchParams(window.location.search);
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    const sessionId = pathParts[pathParts.length - 1];
+    const token = params.get('token');
+
+    const canvas = document.getElementById('annotation-canvas');
+    const img = document.getElementById('screenshot-source');
+    img.src = `/api/sessions/${sessionId}/annotator/screenshot?token=${encodeURIComponent(token)}`;
+
+    let app;
+
+    function resizeCanvas() {
+      const area = document.getElementById('canvas-area');
+      canvas.width = area.clientWidth;
+      canvas.height = area.clientHeight;
+      if (app) app.render();
+    }
+
+    async function boot() {
+      app = new window.RedpenSession.SessionAnnotatorApp({ canvas, screenshotImage: img, sessionId, token });
+      app.onStateChange = renderSidebar;
+      resizeCanvas();
+      await app.load();
+      renderSidebar();
+
+      document.getElementById('new-instruction').addEventListener('click', async () => {
+        await app.createGroup();
+        renderSidebar();
+      });
+      document.getElementById('undo-button').addEventListener('click', async () => {
+        await app.undo();
+        renderSidebar();
+      });
+      document.getElementById('redo-button').addEventListener('click', async () => {
+        await app.redo();
+        renderSidebar();
+      });
+      document.getElementById('submit-button').addEventListener('click', async () => {
+        const status = document.getElementById('submit-status');
+        try {
+          const globalNoteValue = document.getElementById('global-note').value;
+          await app.setGlobalNote(globalNoteValue);
+          const result = await app.submit();
+          status.textContent = `제출 완료: ${result.taskId}`;
+        } catch (err) {
+          status.textContent = `오류: ${err.message}`;
+          status.style.color = '#dc2626';
+        }
+      });
+
+      for (const button of document.querySelectorAll('#toolbar button')) {
+        button.addEventListener('click', () => {
+          app.setTool(button.dataset.tool);
+          for (const b of document.querySelectorAll('#toolbar button')) b.classList.toggle('active', b === button);
+        });
+      }
+      document.querySelector('#toolbar button[data-tool="pen"]').classList.add('active');
+
+      window.__redpenSessionApp = app;
+      window.__redpenRenderSidebar = renderSidebar;
+    }
+
+    function renderSidebar() {
+      const state = app.state;
+      const container = document.getElementById('group-cards');
+      container.innerHTML = '';
+      for (const group of state.groups) {
+        const card = document.createElement('div');
+        card.className = 'group-card' + (group.id === state.activeGroupId ? ' active' : '');
+        card.style.borderColor = group.color;
+        card.dataset.groupId = group.id;
+
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent = `#${group.number}`;
+        card.appendChild(title);
+
+        const textarea = document.createElement('textarea');
+        textarea.placeholder = '이 지시에 대한 설명 (선택)';
+        textarea.value = group.note ?? '';
+        textarea.addEventListener('click', (e) => e.stopPropagation());
+        textarea.addEventListener('change', async () => {
+          await app.setGroupNote(group.id, textarea.value);
+        });
+        card.appendChild(textarea);
+
+        const markCount = document.createElement('div');
+        markCount.style.fontSize = '12px';
+        markCount.style.color = '#666';
+        markCount.textContent = `표시 ${group.markIds.length}개`;
+        card.appendChild(markCount);
+
+        if (group.markIds.length === 0) {
+          const warning = document.createElement('div');
+          warning.className = 'empty-warning';
+          warning.textContent = '⚠️ 아직 아무것도 그리지 않았어요';
+          card.appendChild(warning);
+        }
+
+        card.addEventListener('click', async () => {
+          await app.setActiveGroup(group.id);
+          renderSidebar();
+        });
+        container.appendChild(card);
+      }
+
+      document.getElementById('global-note').value = state.globalNote ?? '';
+      document.getElementById('submit-button').disabled = !state.canSubmit;
+    }
+
+    window.addEventListener('resize', resizeCanvas);
+
+    if (img.complete) {
+      boot();
+    } else {
+      img.addEventListener('load', boot);
+    }
+  </script>
+</body>
+</html>

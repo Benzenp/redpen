@@ -12,7 +12,8 @@
     "test:lifecycle": "tsx src/lifecycle-check.ts",
     "test:mcp": "tsx src/mcp/mcp-check.ts",
     "test:review-loop": "tsx src/review-loop-check.ts",
-    "test:daemon-lifecycle": "tsx src/daemon-lifecycle-check.ts"
+    "test:daemon-lifecycle": "tsx src/daemon-lifecycle-check.ts",
+    "test:ui-e2e": "tsx src/ui-e2e-check.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.0",

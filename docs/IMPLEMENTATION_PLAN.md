@@ -159,17 +159,17 @@ UI보다 먼저 안정적인 task/session schema와 상태 전이를 만든다.
 ### 작업
 
 - [x] screenshot을 잠긴 background로 렌더링
-- [ ] pan/zoom 및 viewport fit (뷰포트 크기=캡처 크기로 고정한 데모 범위에서는 불필요했음; 실제 임의 확대/축소 UI는 아직 없음)
+- [x] pan/zoom 및 viewport fit (session-client.ts: wheel로 zoom, Shift+drag/middle-click drag로 pan; 캔버스 리사이즈 시 fit-to-viewport)
 - [x] `#1` 기본 group 자동 생성
 - [x] 고대비 color palette와 group number badge
 - [x] group card 선택 시 active drawing group 전환
 - [x] freehand, arrow, rectangle, ellipse, text, mask
 - [x] select/move/delete, undo/redo (removeMark + undo/redo 구현·테스트; 포인터 기반 drag-select UI는 아직 없고 프로그래매틱 API만 검증)
-- [ ] global note (그룹별 note는 구현했으나 task 전체 global note 입력 UI는 아직 연결 안 됨 — Phase 3 storage 연동 시 함께 마감)
+- [x] global note (session.html의 실제 textarea → setGlobalNote API → submit에 반영, ui-e2e-check.ts로 왕복 검증)
 - [x] group별 optional note
 - [x] disconnected mark cluster마다 group badge 표시
-- [ ] `새 지시` 및 `N개 지시 제출` (`새 지시` 버튼은 구현·검증; `제출` 버튼과 실제 storage 연동은 Phase 3에서 마감)
-- [x] 빈 group 경고 (`AnnotatorStore.findEmptyGroups`/`canSubmit`으로 구현, UI 버튼 비활성화 연동은 Phase 3)
+- [x] `새 지시` 및 `N개 지시 제출` (두 버튼 모두 실제 daemon API + storage와 연결, 실제 클릭으로 taskId 생성까지 검증)
+- [x] 빈 group 경고 (`AnnotatorStore.findEmptyGroups`/`canSubmit`으로 구현하고, session.html에서 실제 경고 문구 표시 + 제출 버튼 disabled 연동까지 완료)
 - [x] vendor canvas state → Redpen Mark schema adapter (vendor canvas 자체를 쓰지 않고 처음부터 Redpen Mark schema로만 그리므로 adapter가 필요 없음 — 아래 실행 결과 참고)
 - [x] `overlay.svg`와 `annotated.png` export (`overlay.svg`는 `renderOverlaySvg`로 구현; `annotated.png`는 `page.screenshot()`으로 캡처 검증, 실제 daemon 저장 경로는 Phase 3)
 
@@ -197,7 +197,20 @@ UI보다 먼저 안정적인 task/session schema와 상태 전이를 만든다.
 - 브라우저 실행 코드는 esbuild(`apps/annotator/scripts/build.mjs`)로 IIFE 단일 파일(`public/client.bundle.js`)로 번들. `@redpen/protocol`에 서브패스 export(`./schema`, `./ids`, `./geometry` 등)를 추가해 `annotator-core`가 Node 전용 모듈(`storage.ts`의 `fs`/`crypto`)을 배럴 경유로 끌어들이지 않게 분리했다 — 그 전에는 esbuild가 `node:fs/promises` 등을 브라우저 번들에 넣으려다 실패했다.
 - `apps/annotator/src/e2e-check.ts`는 Phase 0 패턴처럼 실제 Chromium으로 데모를 열어 8개 시나리오(잠긴 screenshot 배경 렌더링, `#1` freehand+arrow, `#2` 3열 표+note, `#3` mask+새 rect, group 전환 시 mark groupId 불변, export SVG의 mark-id/배지 존재, undo/redo 왕복)를 검증한다. `file://`로 이미지를 로드하면 Chromium의 cross-origin canvas taint 정책 때문에 `getImageData`가 `SecurityError`를 던져, 로컬 static HTTP 서버(포트 0 자동 할당)로 서빙하도록 바꿔 해결했다 — 실제 daemon도 결국 localhost HTTP로 서빙하므로 이 전환이 프로덕션 경로와도 맞다.
 
-**미해결 항목**: pan/zoom, `제출` 버튼과 실제 storage 연동, global note 입력 UI는 Phase 3(storage 연동)과 함께 마무리한다. 이 phase는 in-memory 상태만 다루었고 `.redpen/tasks/`에는 아직 쓰지 않는다.
+**미해결 항목 해소 (2026-09-01 후속)**: annotation UI를 daemon과 실제로 연결했다. 이전에는 daemon이 `@redpen/annotator-core`의 `AnnotatorStore`를 세션마다 들고 있으면서도 그것을 보여주는 진짜 브라우저 탭을 전혀 열지 않았다 — 사용자가 `redpen open`을 해도 마킹할 화면 자체가 없었다.
+
+- `apps/cli/src/browser/manager.ts`: `openAnnotatorTab()`을 추가해 live 타겟 페이지와 같은 persistent Chromium context 안에 별도 tab으로 annotation UI를 연다(docs/ARCHITECTURE.md §4.2 "annotation UI를 별도 local tab으로 연다"). `REDPEN_HEADLESS=0`으로 실제 사람이 화면을 볼 수 있게 headless 여부를 오버라이드 가능(기존 모든 자동 테스트는 계속 headless).
+- `apps/cli/src/daemon/server.ts`: `GET /annotator/:sessionId`(HTML 페이지), `GET /session.bundle.js`(정적 JS, 세션 무관이라 인증 불필요), `GET /api/sessions/:id/annotator/screenshot`(캡처 이미지)를 추가하고, 나머지 `/api/sessions/:id/annotator/*`에 marks 추가/삭제, undo/redo, group 생성/전환/note, global note, submit까지 REST API로 노출. 브라우저 탭은 top-level navigation과 `<img>` 요청에 Authorization 헤더를 못 붙이므로 이 라우트들만 `?token=` 쿼리 파라미터 인증도 허용(그 외 라우트는 여전히 헤더만 허용).
+- `apps/cli/src/application/service.ts`: `getAnnotatorState`/`addMark`/`removeMark`/`undoAnnotation`/`redoAnnotation`/`createAnnotationGroup`/`setActiveAnnotationGroup`/`setAnnotationGroupNote`/`setGlobalNote`/`exportAnnotationOverlaySvg`를 추가해 UI가 CLI와 동일한 application core만 호출하게 했다. `freeze()`가 daemon 자신의 origin(포트+토큰)을 알아야 annotator URL을 만들 수 있어 `setSelfOrigin()`을 추가하고 `startDaemon()`이 리슨 성공 직후 호출.
+- `apps/annotator/src/session-client.ts`(신규): 데몬 API가 유일한 canonical 상태이고 UI는 optimistic mutation을 하지 않는 `SessionAnnotatorApp`. 실제 pointer 이벤트(pointerdown/move/up)로 freehand/arrow/rectangle/ellipse/mask를 그리고, `prompt()`로 text mark를 추가하며, 마우스 wheel로 확대/축소, Shift+drag 또는 middle-click drag로 pan을 구현. 모든 그리기 동작은 즉시 daemon에 POST하고 응답으로 다시 렌더링(로컬 상태를 따로 신뢰하지 않음).
+- `apps/annotator/public/session.html`(신규): 캔버스 + 툴바 + 사이드바(그룹 카드, 그룹별 note textarea, 전체 note textarea, undo/redo, 제출 버튼)를 갖춘 실제 사용 페이지. 빈 그룹에는 "⚠️ 아직 아무것도 그리지 않았어요" 경고를 표시하고 제출 버튼은 `canSubmit`이 false면 비활성화된다.
+
+**막힌 문제와 해결**:
+- `session.bundle.js`를 `?token=` 쿼리로 보호했더니 `<script src="/session.bundle.js">`가 401을 받아 앱이 전혀 부팅되지 않았다 — `<script>` 태그의 `src`에는 쿼리스트링을 넣을 수 없다는 걸 놓쳤다. 해결: 이 파일은 세션 정보를 전혀 담지 않는 정적 코드이므로 인증 없이 서빙하도록 바꿨다.
+- 캔버스 위에 툴바가 `position: absolute; top:12px; left:12px`로 겹쳐 있어서, 좌상단 근처 좌표(예: 50,50)로 pointer 이벤트를 보내면 캔버스가 아니라 툴바 버튼이 이벤트를 가로챘다 — 실제 e2e 테스트로 좌표를 툴바 밖(300,300 이상)으로 옮겨서 발견/해결.
+- 캔버스 pointer 드래그로 mark를 추가해도 사이드바의 제출 버튼 `disabled` 상태가 갱신되지 않는 실제 버그를 발견했다 — 사이드바 재렌더링이 버튼 클릭 핸들러 안에서만 호출되고 있었다. `SessionAnnotatorApp`에 `onStateChange` 콜백을 추가해 모든 daemon round-trip(그리기 포함) 후 호출되도록 해서 그림을 그리자마자 제출 버튼이 즉시 활성화되게 고쳤다.
+
+Verified via `apps/cli/src/ui-e2e-check.ts`: 실제 `redpen` CLI로 open/freeze한 뒤, 진짜 Playwright 브라우저 탭에서 annotator 페이지를 열어 pointer drag로 사각형을 그리고(실제 API round-trip으로 mark 1개 생성 확인), wheel로 확대(scale 변경 확인), Shift+drag로 이동(pan 변경 확인), 사이드바 "새 지시" 버튼으로 그룹 2 생성, 두 번째 그룹에도 타원을 그려 채우고, 실제 textarea에 전체 note를 입력하고 실제 제출 버튼을 클릭 → 제출 완료 메시지와 taskId 확인 → CLI로 그 task를 다시 읽어 note와 그룹 2개가 그대로 저장됐는지까지 10/10 통과. 기존 test:lifecycle(16/16), test:daemon-lifecycle(11/11), test:mcp(11/11), test:review-loop(11/11), 그리고 annotator/protocol/annotator-core/grounding/review 유닛 테스트(총 93개) 전부 회귀 없이 재통과 확인.
 
 ## 6. Phase 3 — DOM grounding과 task bundle
 

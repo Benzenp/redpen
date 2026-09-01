@@ -18,3 +18,13 @@ await esbuild.build({
   sourcemap: false,
   logLevel: 'info',
 });
+
+await esbuild.build({
+  entryPoints: [path.resolve(__dirname, '../src/session-client.ts')],
+  bundle: true,
+  outfile: path.resolve(__dirname, '../public/session.bundle.js'),
+  format: 'iife',
+  target: ['chrome110'],
+  sourcemap: false,
+  logLevel: 'info',
+});

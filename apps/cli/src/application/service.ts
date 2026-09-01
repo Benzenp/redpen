@@ -16,7 +16,7 @@ import { generateSessionId, generateTaskId, generateFrameId } from '@redpen/prot
 import type { VisualSession, InstructionGroup, Mark } from '@redpen/protocol/schema';
 import { writeTaskBundle, readTaskBundle, listTaskIds } from '@redpen/protocol/storage';
 import { collectDomIndex, captureAndGround, assembleVisualTask } from '@redpen/grounding';
-import { AnnotatorStore } from '@redpen/annotator-core';
+import { AnnotatorStore, renderOverlaySvg, type NewMarkInput } from '@redpen/annotator-core';
 import { createRevision } from '@redpen/review';
 
 export interface OpenSessionOptions {
@@ -32,6 +32,20 @@ export class RedpenApplicationService {
   // authoring state until submit. Not persisted — a daemon restart loses drafts
   // in progress, matching docs/ARCHITECTURE.md §10's stated recovery behavior.
   private readonly stores = new Map<string, AnnotatorStore>();
+  // Global note text staged by the annotation UI before submit, keyed by
+  // sessionId. Mirrors `stores` lifetime exactly (set on freeze, cleared on
+  // submit/close) rather than being folded into AnnotatorStore, since it is
+  // task-level metadata rather than a group/mark.
+  private readonly globalNotes = new Map<string, string | undefined>();
+  // Set by daemon/server.ts once the HTTP server is actually listening, so
+  // freeze() can point the annotation tab at this daemon's own address.
+  // Unset in tests that call the service directly without a daemon (submit
+  // still works via captureAndGround; only the actual tab-opening is skipped).
+  private selfOrigin: { port: number; token: string } | undefined;
+
+  setSelfOrigin(origin: { port: number; token: string }): void {
+    this.selfOrigin = origin;
+  }
 
   async openSession(opts: OpenSessionOptions): Promise<VisualSession> {
     assertLoopbackUrl(opts.url);
@@ -89,10 +103,17 @@ export class RedpenApplicationService {
       capturedAt: domIndex.capturedAt,
     });
     this.stores.set(sessionId, new AnnotatorStore());
+    this.globalNotes.delete(sessionId);
 
     session.state = nextState;
     session.updatedAt = new Date().toISOString();
     await saveSession(session);
+
+    if (this.selfOrigin) {
+      const annotatorUrl = `http://127.0.0.1:${this.selfOrigin.port}/annotator/${sessionId}?token=${this.selfOrigin.token}`;
+      await this.browser.openAnnotatorTab(sessionId, annotatorUrl);
+    }
+
     return session;
   }
 
@@ -100,6 +121,78 @@ export class RedpenApplicationService {
     const store = this.stores.get(sessionId);
     if (!store) throw new NoActiveCaptureError(sessionId);
     return store;
+  }
+
+  /**
+   * Snapshot the daemon-side AnnotatorStore + capture metadata as the
+   * annotation UI's single source of truth (docs/ARCHITECTURE.md \u00a73.6:
+   * the UI never keeps its own canonical mark state \u2014 it renders whatever
+   * this returns and posts actions back through the methods below).
+   */
+  getAnnotatorState(sessionId: string) {
+    const store = this.getAnnotatorStore(sessionId);
+    const capture = this.runtime.getCapture(sessionId);
+    if (!capture) throw new NoActiveCaptureError(sessionId);
+    return {
+      frameId: capture.frameId,
+      viewport: capture.viewport,
+      groups: store.getGroups(),
+      marks: store.getMarks(),
+      activeGroupId: store.getActiveGroupId(),
+      globalNote: this.globalNotes.get(sessionId),
+      emptyGroups: store.findEmptyGroups(),
+      canSubmit: store.canSubmit(),
+    };
+  }
+
+  getCaptureScreenshot(sessionId: string): Buffer {
+    const capture = this.runtime.getCapture(sessionId);
+    if (!capture) throw new NoActiveCaptureError(sessionId);
+    return capture.screenshot;
+  }
+
+  addMark(sessionId: string, input: NewMarkInput) {
+    const store = this.getAnnotatorStore(sessionId);
+    return store.addMark(input);
+  }
+
+  removeMark(sessionId: string, markId: string): void {
+    this.getAnnotatorStore(sessionId).removeMark(markId);
+  }
+
+  undoAnnotation(sessionId: string): boolean {
+    return this.getAnnotatorStore(sessionId).undo();
+  }
+
+  redoAnnotation(sessionId: string): boolean {
+    return this.getAnnotatorStore(sessionId).redo();
+  }
+
+  createAnnotationGroup(sessionId: string) {
+    return this.getAnnotatorStore(sessionId).createGroup();
+  }
+
+  setActiveAnnotationGroup(sessionId: string, groupId: string): void {
+    this.getAnnotatorStore(sessionId).setActiveGroup(groupId);
+  }
+
+  setAnnotationGroupNote(sessionId: string, groupId: string, note: string | undefined): void {
+    this.getAnnotatorStore(sessionId).setGroupNote(groupId, note);
+  }
+
+  setGlobalNote(sessionId: string, note: string | undefined): void {
+    this.globalNotes.set(sessionId, note);
+  }
+
+  exportAnnotationOverlaySvg(sessionId: string): string {
+    const store = this.getAnnotatorStore(sessionId);
+    const capture = this.runtime.getCapture(sessionId);
+    if (!capture) throw new NoActiveCaptureError(sessionId);
+    const groups = store.getGroups();
+    const badges = groups.flatMap((g) =>
+      store.computeBadgeClusters(g.id).map((cluster) => ({ groupNumber: g.number, color: g.color, cluster })),
+    );
+    return renderOverlaySvg(capture.viewport, store.getMarks(), groups, badges);
   }
 
   /**
@@ -115,6 +208,9 @@ export class RedpenApplicationService {
     const capture = this.runtime.getCapture(sessionId);
     const store = this.stores.get(sessionId);
     if (!capture || !store) throw new NoActiveCaptureError(sessionId);
+    // An explicit --note/globalNote argument always wins; otherwise fall back
+    // to whatever the annotation UI staged via setGlobalNote().
+    const effectiveGlobalNote = globalNote ?? this.globalNotes.get(sessionId);
 
     const page = this.runtime.getPage(sessionId);
     const targets = page ? await captureAndGround(page, capture.frameId, store.getMarks()) : [];
@@ -140,7 +236,7 @@ export class RedpenApplicationService {
           groups: store.getGroups(),
           marks: store.getMarks(),
           targets,
-          globalNote,
+          globalNote: effectiveGlobalNote,
         })
       : assembleVisualTask({
           taskId,
@@ -150,7 +246,7 @@ export class RedpenApplicationService {
           groups: store.getGroups(),
           marks: store.getMarks(),
           targets,
-          globalNote,
+          globalNote: effectiveGlobalNote,
         });
 
     await writeTaskBundle(session.workspaceRoot, task, [
@@ -165,6 +261,7 @@ export class RedpenApplicationService {
     await saveSession(session);
 
     this.runtime.clearCapture(sessionId);
+    this.globalNotes.delete(sessionId);
     this.runtime.notifySubmitted(sessionId, taskId);
 
     return { session, taskId };
@@ -218,6 +315,7 @@ export class RedpenApplicationService {
     await this.browser.closePage(sessionId);
     this.runtime.remove(sessionId);
     this.stores.delete(sessionId);
+    this.globalNotes.delete(sessionId);
     await deleteSession(sessionId);
   }
 
