@@ -142,9 +142,18 @@ async function main(): Promise<number> {
         return EXIT_CODES.OK;
       }
 
+      case 'mcp': {
+        const { runMcpServer } = await import('./mcp/server.js');
+        await runMcpServer();
+        // The MCP stdio transport keeps the process alive indefinitely to
+        // serve requests; unlike every other command, it must NOT reach the
+        // process.exit() call below.
+        return -1;
+      }
+
       default:
         printHuman(
-          'usage: redpen <open|list|status|freeze|submit|wait|claim|review|accept|close|task> [...] [--json] [--project <path>]',
+          'usage: redpen <open|list|status|freeze|submit|wait|claim|review|accept|close|task|mcp> [...] [--json] [--project <path>]',
         );
         return EXIT_CODES.USAGE_ERROR;
     }
@@ -161,6 +170,7 @@ async function main(): Promise<number> {
 }
 
 main().then((code) => {
+  if (code === -1) return; // `mcp` command: stay alive to serve stdio requests.
   // fetch()'s underlying undici keep-alive sockets can otherwise hold the
   // event loop open after the CLI has already printed its one JSON line.
   process.exitCode = code;

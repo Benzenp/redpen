@@ -324,16 +324,16 @@ Codex 및 Claude가 자연어 요청에서 Redpen 세션을 열고 제출된 작
 
 ### 작업
 
-- [ ] MCP stdio server entrypoint
-- [ ] session start/wait/get/update/review/cancel tools
-- [ ] tool input/output schema를 protocol DTO와 공유
-- [ ] long-running wait timeout/cancellation 처리
-- [ ] task asset path와 compact summary 반환
-- [ ] 공용 Agent Skills 표준에 맞는 `SKILL.md`
-- [ ] Codex 설치 script
-- [ ] Claude 설치 script
-- [ ] 두 host의 명령/설정 예제
-- [ ] “plan only” 기본 규칙
+- [x] MCP stdio server entrypoint
+- [x] session start/wait/get/update/review/cancel tools
+- [x] tool input/output schema를 protocol DTO와 공유
+- [x] long-running wait timeout/cancellation 처리
+- [x] task asset path와 compact summary 반환
+- [x] 공용 Agent Skills 표준에 맞는 `SKILL.md`
+- [x] Codex 설치 script
+- [x] Claude 설치 script
+- [x] 두 host의 명령/설정 예제
+- [x] “plan only” 기본 규칙
 
 ### Skill golden flow
 
@@ -352,6 +352,18 @@ Agent: 구현 계획 제시
 - 동일한 fixture task를 Codex와 Claude가 읽는다.
 - 두 agent 모두 모든 Instruction Group을 누락 없이 나열한다.
 - 사용자가 수정까지 요청하지 않은 경우 파일을 변경하지 않는다.
+
+### Phase 5 실행 결과 (2026-09-01)
+
+`apps/cli/src/mcp/`와 `skills/redpen/`에 구현. `pnpm --filter @redpen/cli run test:mcp` 11/11 통과(InMemoryTransport로 실제 McpServer를 구동), `node skills/redpen/scripts/install-check.mjs` 7/7 통과, `tsc --noEmit` clean.
+
+- `mcp/server.ts`: `redpen_start_session`/`redpen_wait_for_submission`/`redpen_get_task`/`redpen_update_task`/`redpen_open_review`/`redpen_cancel_session` 6개 tool을 `McpServer.registerTool`로 등록. 각 tool은 CLI와 동일한 `DaemonClient`만 호출해 business logic을 MCP 쪽에 복제하지 않는다(docs/ARCHITECTURE.md §2.1). input schema는 zod로 정의.
+- `redpen_wait_for_submission`은 timeout을 에러로 취급하지 않고 `{ taskId: null, session }`을 반환한다 — MCP host별 long-running tool 제한이 있어도 `redpen_get_task`로 항상 재조회 가능.
+- `redpen_update_task(session_id, state)`는 `working`/`review`/`done` 세 값을 각각 claim/reviewReady/accept로 매핑해 하나의 tool로 세 전이를 표현.
+- `skills/redpen/SKILL.md`: golden flow, 6개 tool 설명, task bundle 읽는 법(selectorHints는 실행 보장 selector가 아니라는 점, group 번호가 identity라는 점, targetIds가 없는 group도 유효하다는 점), plan-only 기본 규칙을 명시.
+- `skills/redpen/scripts/install-codex.sh`, `install-claude.sh`: 각각 `SKILL.md`를 host의 skill 디렉터리로 복사하고 MCP 서버 항목(Codex는 `config.toml`의 `[mcp_servers.redpen]`, Claude는 프로젝트 `.mcp.json`)을 추가. 두 스크립트가 정확히 동일한 `SKILL.md`를 배포하는지와 설정 파일이 실제로 쓰였는지를 `install-check.mjs`로 검증.
+
+**미해결 항목**: 실제 Codex CLI/Claude Code 프로세스를 띄워 두 host가 동일 fixture task를 읽는 것까지는 확인하지 못했다(에이전트 host 자체는 이 저장소 밖의 설치된 도구이므로). 대신 (1) 두 개의 독립적인 MCP client가 같은 task를 호출해 바이트 단위로 동일한 결과를 받는지, (2) 두 install script가 바이트 단위로 동일한 `SKILL.md`를 배포하는지로 "Codex와 Claude가 동일한 task를 읽는다"는 요구를 양쪽에서 근접 검증했다.
 
 ## 9. Phase 6 — Review loop와 안정화
 
