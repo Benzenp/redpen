@@ -45,9 +45,13 @@ function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<{ stdout: strin
 }
 
 function jsonAppDataEnv(appDataDir: string): NodeJS.ProcessEnv {
-  if (process.platform === 'win32') return { APPDATA: appDataDir };
-  if (process.platform === 'darwin') return { HOME: appDataDir };
-  return { XDG_DATA_HOME: appDataDir };
+  // REDPEN_HEADLESS=1 required explicitly \u2014 the daemon defaults to a
+  // visible browser (see browser/manager.ts); this unattended check must
+  // override that default.
+  const base = { REDPEN_HEADLESS: '1' };
+  if (process.platform === 'win32') return { ...base, APPDATA: appDataDir };
+  if (process.platform === 'darwin') return { ...base, HOME: appDataDir };
+  return { ...base, XDG_DATA_HOME: appDataDir };
 }
 
 function discoveryPathFor(appDataDir: string): string {

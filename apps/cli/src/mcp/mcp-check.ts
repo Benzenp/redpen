@@ -81,6 +81,10 @@ async function main() {
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'redpen-mcp-ws-'));
   const priorAppData = process.env.APPDATA;
   process.env.APPDATA = appDataDir; // isolate daemon discovery/browser-profile/sessions
+  // The daemon defaults to a VISIBLE browser (see browser/manager.ts); this
+  // unattended check must opt into headless explicitly.
+  const priorHeadless = process.env.REDPEN_HEADLESS;
+  process.env.REDPEN_HEADLESS = '1';
 
   try {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -179,6 +183,8 @@ async function main() {
     await server.close();
     await stopDaemonIfRunning(appDataDir);
     if (priorAppData !== undefined) process.env.APPDATA = priorAppData;
+    if (priorHeadless !== undefined) process.env.REDPEN_HEADLESS = priorHeadless;
+    else delete process.env.REDPEN_HEADLESS;
     await rm(appDataDir, { recursive: true, force: true }).catch(() => {});
     await rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
   }

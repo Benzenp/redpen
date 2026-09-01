@@ -436,6 +436,13 @@ Agent: 구현 계획 제시
 
 Verified: `apps/cli/src/ui-e2e-check.ts`에 3개 체크 추가(Ctrl+Z가 실제로 undo, Ctrl+Shift+Z가 실제로 redo, erase 도구로 실제 클릭한 mark가 삭제됨 — pan/zoom 이후에도 좌표 변환이 정확한지까지 포함) — 13/13 통과. 기존 lifecycle(18/18)/daemon-lifecycle(11/11)/mcp(11/11)/review-loop(11/11) 및 패키지 유닛 테스트(93개) 전부 회귀 없이 재통과. `tsc --noEmit` clean.
 
+**추가 후속 개선 (동일 피드백 라운드)**:
+
+- **툴바 아이콘 교체**: 이모지(✏️↗▢◯▪⌫↶↷)는 OS/폰트마다 렌더링이 들쭉날쭉하고 미니멀 톤과 안 맞아서, 전부 직접 그린 24x24 stroke 스타일 인라인 SVG로 교체했다(펜/화살표/사각형/원/텍스트/마스크/지우개/undo/redo). 서드파티 아이콘 라이브러리를 추가하지 않고 벤더 종속 없이 자체 SVG path로 구현.
+- **headless 기본값 반전**: `browser/manager.ts`의 `resolveHeadless()`가 기존에는 `REDPEN_HEADLESS` 미설정 시 `true`(headless)였는데, Redpen은 사용자가 화면을 보고 직접 그리는 게 제품의 핵심이라 headless가 기본이면 제품이 아예 안 보이는 상태가 된다. **기본값을 headed(화면 표시)로 반전**하고, 자동화된 체크(`test:lifecycle`, `test:daemon-lifecycle`, `test:mcp`, `test:review-loop`, `test:ui-e2e`)는 전부 각자의 spawn env에 `REDPEN_HEADLESS=1`을 명시적으로 지정하도록 바꿔서, "안 보이게 하고 싶으면 명시적으로 opt-in" 원칙으로 뒤집었다. 이제 아무 설정 없이 `redpen open`을 실행하면 항상 실제 창이 뜬다.
+
+Verified: 아이콘 교체 후 `test:ui-e2e` 13/13 재통과(버튼 selector는 `data-tool` 속성 기반이라 아이콘 마크업 변경에 영향받지 않음). headless 기본값 반전 후 5개 자동 체크 스위트(lifecycle 18/18, daemon-lifecycle 11/11, mcp 11/11, review-loop 11/11, ui-e2e 13/13) 전부 각자 env에서 `REDPEN_HEADLESS=1`을 명시했을 때만 통과하는 것으로 재확인 — 즉 기본값이 실제로 뒤집혔음을 검증했다.
+
 ## 10. 테스트 전략
 
 ### Unit

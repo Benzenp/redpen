@@ -10,15 +10,20 @@ import { browserProfileDir } from '@redpen/protocol/paths';
 import { mkdir } from 'node:fs/promises';
 
 /**
- * Headless by default (matches every automated check in this repo, and is
- * the safe default for an agent-spawned daemon), but overridable via
- * `REDPEN_HEADLESS=0` so a human running `redpen open` locally can actually
- * see the live page and the annotation tab that `freeze()` opens.
+ * Headed (visible) by default. Redpen's entire point is that the user
+ * looks at the live page and draws on it (docs/PRODUCT_INTENT.md "Visual
+ * first") \u2014 a headless browser makes the product unusable, since there is
+ * no window for the user to see or click on. Automated checks in this repo
+ * are the only legitimate reason to run headless, and they always set
+ * `REDPEN_HEADLESS=1` explicitly rather than relying on a default. Do not
+ * flip this default back to headless; if a daemon needs to run unattended
+ * (e.g. spawned by an agent with no human present), that caller must still
+ * pass `REDPEN_HEADLESS=1` deliberately, not inherit it silently.
  */
 function resolveHeadless(): boolean {
   const raw = process.env.REDPEN_HEADLESS;
-  if (raw === undefined) return true;
-  return raw !== '0' && raw.toLowerCase() !== 'false';
+  if (raw === undefined) return false;
+  return raw === '1' || raw.toLowerCase() === 'true';
 }
 
 export class BrowserManager {

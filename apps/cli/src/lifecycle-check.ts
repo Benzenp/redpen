@@ -83,9 +83,13 @@ function jsonAppDataEnv(appDataDir: string): NodeJS.ProcessEnv {
   // profile, sessions) into an isolated temp dir per test run, via the same
   // env vars @redpen/protocol/paths already reads (APPDATA / XDG_DATA_HOME),
   // so concurrent test runs and the developer's real daemon never collide.
-  if (process.platform === 'win32') return { APPDATA: appDataDir };
-  if (process.platform === 'darwin') return { HOME: appDataDir };
-  return { XDG_DATA_HOME: appDataDir };
+  // REDPEN_HEADLESS=1 is required explicitly \u2014 the daemon defaults to a
+  // VISIBLE browser (see browser/manager.ts), which this check must override
+  // since it runs unattended.
+  const base = { REDPEN_HEADLESS: '1' };
+  if (process.platform === 'win32') return { ...base, APPDATA: appDataDir };
+  if (process.platform === 'darwin') return { ...base, HOME: appDataDir };
+  return { ...base, XDG_DATA_HOME: appDataDir };
 }
 
 async function main() {

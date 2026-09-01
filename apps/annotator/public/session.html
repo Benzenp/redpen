@@ -65,12 +65,15 @@
       background: transparent;
       border-radius: 6px;
       cursor: pointer;
-      font-size: 15px;
       color: var(--ink);
       display: flex;
       align-items: center;
       justify-content: center;
       transition: background 0.1s ease;
+    }
+    #toolbar button svg {
+      width: 17px;
+      height: 17px;
     }
     #toolbar button:hover { background: var(--canvas-bg); }
     #toolbar button.active { background: var(--ink); color: white; }
@@ -223,17 +226,35 @@
       <img id="screenshot-source" alt="" />
       <canvas id="annotation-canvas" class="tool-pen"></canvas>
       <div id="toolbar">
-        <button data-tool="pen" title="펜 (P)">✏️</button>
-        <button data-tool="arrow" title="화살표 (A)">↗</button>
-        <button data-tool="rectangle" title="사각형 (R)">▢</button>
-        <button data-tool="ellipse" title="원 (O)">◯</button>
-        <button data-tool="text" title="텍스트 (T)">T</button>
-        <button data-tool="mask" title="가리기 (M)">▪</button>
+        <button data-tool="pen" title="펜 (P)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </button>
+        <button data-tool="arrow" title="화살표 (A)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5"/><path d="M9 5h10v10"/></svg>
+        </button>
+        <button data-tool="rectangle" title="사각형 (R)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/></svg>
+        </button>
+        <button data-tool="ellipse" title="원 (O)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg>
+        </button>
+        <button data-tool="text" title="텍스트 (T)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14"/><path d="M12 6v14"/><path d="M9 20h6"/></svg>
+        </button>
+        <button data-tool="mask" title="가리기 (M)">
+          <svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="5" width="16" height="14" rx="2"/></svg>
+        </button>
         <div class="divider"></div>
-        <button data-tool="erase" title="지우개 (E)">⌫</button>
+        <button data-tool="erase" title="지우개 (E)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H8.5L4 15.5a1.5 1.5 0 0 1 0-2.1l9-9a1.5 1.5 0 0 1 2.1 0l4.9 4.9a1.5 1.5 0 0 1 0 2.1L13.5 18"/><path d="M14.5 6.5 18 10"/></svg>
+        </button>
         <div class="divider"></div>
-        <button id="undo-button" title="되돌리기 (Ctrl+Z)">↶</button>
-        <button id="redo-button" title="다시 실행 (Ctrl+Shift+Z)">↷</button>
+        <button id="undo-button" title="되돌리기 (Ctrl+Z)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h11a5 5 0 0 1 0 10H8"/><path d="M8 5 3 10l5 5"/></svg>
+        </button>
+        <button id="redo-button" title="다시 실행 (Ctrl+Shift+Z)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10H10a5 5 0 0 0 0 10h7"/><path d="M16 5l5 5-5 5"/></svg>
+        </button>
       </div>
       <div id="zoom-indicator">100%</div>
     </div>
