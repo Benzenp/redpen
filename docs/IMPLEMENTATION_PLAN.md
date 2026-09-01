@@ -114,27 +114,41 @@ UI보다 먼저 안정적인 task/session schema와 상태 전이를 만든다.
 
 - [ ] `schemaVersion: 1` protocol 정의
 - [ ] VisualTask, Frame, InstructionGroup, Mark, DomTarget schema
-- [ ] CSS pixel 및 normalized coordinate utility
-- [ ] session state machine 구현
-- [ ] invalid transition 오류 정의
-- [ ] task ID/session ID 생성 규칙
-- [ ] workspace 및 global app-data path resolution
-- [ ] atomic bundle writer와 checksum
-- [ ] `.redpen/latest.json` writer
-- [ ] schema migration entrypoint 틀
+- [x] CSS pixel 및 normalized coordinate utility
+- [x] session state machine 구현
+- [x] invalid transition 오류 정의
+- [x] task ID/session ID 생성 규칙
+- [x] workspace 및 global app-data path resolution
+- [x] atomic bundle writer와 checksum
+- [x] `.redpen/latest.json` writer
+- [x] schema migration entrypoint 틀
 
 ### 테스트
 
-- [ ] schema round-trip
-- [ ] 모든 합법/불법 상태 전이
-- [ ] coordinate transform property test
-- [ ] atomic write 중단 복구
-- [ ] path traversal 방지
+- [x] schema round-trip
+- [x] 모든 합법/불법 상태 전이
+- [x] coordinate transform property test
+- [x] atomic write 중단 복구
+- [x] path traversal 방지
 
 ### 완료 조건
 
 - fixture JSON이 validation을 통과하고 다시 읽었을 때 손실이 없다.
 - interrupted write가 유효한 제출 작업으로 노출되지 않는다.
+
+### Phase 1 실행 결과 (2026-09-01)
+
+`packages/protocol/src/`에 구현 완료. `pnpm --filter @redpen/protocol run test` 30/30 통과, `run typecheck` clean.
+
+- `schema.ts`: zod discriminated union으로 6종 Mark(`freehand`/`arrow`/`rectangle`/`ellipse`/`text`/`mask`), `VisualSession`, `VisualTask`, `Frame`, `InstructionGroup`, `DomTarget`을 정의. `computedLayout`은 allowlist 12개 키로 제한(런타임 `refine`으로 검증).
+- `geometry.ts`: CSS pixel ↔ normalized(0..1) rect/point 변환, rect intersection/containment/area 유틸. property-test로 왕복 변환 무손실 확인.
+- `state-machine.ts`: `docs/ARCHITECTURE.md` §5 상태 다이어그램을 그대로 전이 테이블로 구현. 8 session state × 9 transition = 72개 조합 전부(합법 11개 + 불법 61개)를 열거해 테스트.
+- `ids.ts`: ULID 기반 `rps_`/`rpt_`/`frm_`/`grp_`/`mrk_`/`tgt_` prefix ID 생성.
+- `paths.ts`: workspace 하위 `.redpen/tasks/<id>` 경로와 OS별 global app-data 경로(Windows `%APPDATA%`, macOS `~/Library/Application Support`, Linux `$XDG_DATA_HOME`) 분리. id에 `..`, path separator, null byte가 있으면 `PathTraversalError`.
+- `storage.ts`: `.tmp-<task-id>/`에 먼저 쓰고 checksum 계산 후 atomic rename하는 writer. 중단 시나리오(유효하지 않은 content로 강제 실패)에서 tmp/최종 디렉터리 모두 남지 않음을 테스트로 확인.
+- `migrations.ts`: schemaVersion 기반 forward-migration 레지스트리 틀 (현재는 v1만 존재하므로 등록된 migrator 없음).
+
+**미해결 항목**: 이 phase는 순수 protocol 레이어만 구현했고 daemon/CLI에 아직 연결하지 않았다. Phase 4(CLI lifecycle)에서 실제 session/task 생성 흐름에 연결할 때 이 패키지를 그대로 import해서 쓴다.
 
 ## 5. Phase 2 — Annotation UI와 색깔별 지시
 
