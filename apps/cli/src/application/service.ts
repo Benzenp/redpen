@@ -146,6 +146,10 @@ export class RedpenApplicationService {
     this.selfOrigin = origin;
   }
 
+  onBrowserClosed(handler: () => void): void {
+    this.browser.onUnexpectedContextClose(handler);
+  }
+
   getBrowserCapability(sessionId: string, kind: 'overlay' | 'annotator'): string | undefined {
     return this.capabilities.get(sessionId)?.[kind];
   }

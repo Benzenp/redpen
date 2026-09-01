@@ -185,9 +185,21 @@ export class BrowserManager {
   private context: BrowserContext | null = null;
   private contextPromise: Promise<BrowserContext> | null = null;
   private closing = false;
+  private unexpectedContextCloseHandler: (() => void) | null = null;
   private readonly closedContexts = new WeakSet<BrowserContext>();
   private readonly pages = new Map<string, Page>();
   private readonly annotatorPages = new Map<string, Page>();
+  private readonly profileDir: string;
+  private readonly headless: boolean;
+
+  constructor(options: { profileDir?: string; headless?: boolean } = {}) {
+    this.profileDir = options.profileDir ?? browserProfileDir();
+    this.headless = options.headless ?? resolveHeadless();
+  }
+
+  onUnexpectedContextClose(handler: () => void): void {
+    this.unexpectedContextCloseHandler = handler;
+  }
 
   async ensureContext(): Promise<BrowserContext> {
     if (this.closing) throw new Error('browser manager is shutting down');
@@ -210,9 +222,9 @@ export class BrowserManager {
   }
 
   private async launchContext(): Promise<BrowserContext> {
-    await mkdir(browserProfileDir(), { recursive: true });
-    const context = await chromium.launchPersistentContext(browserProfileDir(), {
-      headless: resolveHeadless(),
+    await mkdir(this.profileDir, { recursive: true });
+    const context = await chromium.launchPersistentContext(this.profileDir, {
+      headless: this.headless,
       viewport: { width: 1280, height: 900 },
       // 2x device scale so annotation screenshots (and the user's own eyes
       // when marking up the page) aren't stuck at blurry 1x. The daemon
@@ -222,12 +234,14 @@ export class BrowserManager {
     });
     context.once('close', () => {
       this.closedContexts.add(context);
+      const closedUnexpectedly = !this.closing;
       if (this.context === context) {
         this.context = null;
         this.contextPromise = null;
         this.pages.clear();
         this.annotatorPages.clear();
       }
+      if (closedUnexpectedly) this.unexpectedContextCloseHandler?.();
     });
     this.context = context;
     return context;

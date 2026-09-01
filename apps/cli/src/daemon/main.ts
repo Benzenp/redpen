@@ -33,6 +33,7 @@ async function main() {
   process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());
   daemon.server.once('redpenShutdownRequested', () => void shutdown());
+  daemon.server.once('redpenBrowserClosed', () => void shutdown());
 }
 
 main().catch((err) => {

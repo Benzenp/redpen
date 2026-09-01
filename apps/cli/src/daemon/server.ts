@@ -404,6 +404,9 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
         : status === 500 ? { error: 'internal_error' } : { error: 'bad_request' });
     }
   });
+  service.onBrowserClosed(() => {
+    server.emit('redpenBrowserClosed');
+  });
 
   await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();

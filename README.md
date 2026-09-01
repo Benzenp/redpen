@@ -47,7 +47,7 @@ Redpen installs its dedicated Playwright Chromium during package installation.
 Install the latest GitHub release globally:
 
 ```bash
-npm install -g https://github.com/Benzenp/redpen/releases/download/v0.1.0/redpen-cli-0.1.0.tgz
+npm install -g https://github.com/Benzenp/redpen/releases/download/v0.1.1/redpen-cli-0.1.1.tgz
 ```
 
 Verify the daemon:
@@ -68,7 +68,9 @@ redpen open http://localhost:5173 --project .
 
 Run the dev server and `redpen open` in separate terminals. The Node daemon
 runs as a hidden background process on Windows while Chromium remains visible.
-Press **F9** in Chromium to capture and annotate the current page.
+Press **F9** in Chromium to capture and annotate the current page. Closing the
+dedicated Chromium window automatically shuts down the Redpen daemon and
+removes its discovery record.
 
 ## Run from source
 
@@ -241,4 +243,4 @@ skills/
 
 ## Status
 
-Redpen is a production-packaged local developer tool at version `0.1.0`. The CLI package is ready to pack and publish; no external service is required.
+Redpen is a production-packaged local developer tool at version `0.1.1`. The CLI package is ready to pack and publish; no external service is required.
