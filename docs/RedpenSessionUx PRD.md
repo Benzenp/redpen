@@ -72,12 +72,20 @@
 ### 요구사항
 
 1. `Mark` 스키마는 `patch`와 `line`을 지원하고 obsolete `image` 마크는 제거한다.
-2. 어노테이션 UI의 patch 도구는 2단계 드래그 제스처여야 한다: 1차 드래그로 복사할 원본 영역을 선택하고, 2차 드래그로 목적지에 배치해야 커밋된다. 배치 전에는 실제 스크린샷 픽셀이 커서를 따라 미리보기되어야 한다.
+2. 별도 patch 도구 없이 기본 `V` Select/Move에서 빈 영역 marquee를 만들고,
+   그 영역을 드래그해 목적지에 놓을 때 `patch`를 커밋한다. 생성 후에는 일반
+   mark와 같은 이동/resize/Delete/undo를 제공하되 `sourceRect`는 유지한다.
 3. 우측 Instruction Group 카드마다 붙여넣기와 다중 drag/drop을 받는 레퍼런스 존을 두고 최대 3장까지 썸네일·삭제를 지원한다.
 4. 첨부 이미지는 daemon을 통해 `<workspaceRoot>/.redpen/references/`에 저장하고 제출 task의 `references/`에도 복사한다. `group.referenceIds`와 `task.references`가 연결 관계와 경로를 보존해야 한다.
 5. 레퍼런스는 캔버스나 `annotated.png`에 합성하지 않는다. 에이전트가 그룹별 시각 지시와 함께 열어보는 참고자료다.
 6. 직선은 그룹 색상의 시작점→끝점 선으로 저장·렌더링하며 화살촉이 없어야 한다.
-7. 텍스트는 드래그한 bounds 위에 편집 영역을 열고, 그룹 색상으로 줄바꿈·클리핑해 canvas와 `overlay.svg`에 동일하게 표시한다.
+7. 텍스트는 클릭 즉시 기본 편집 영역을 열고, drag 시 bounded 영역을 만든다.
+   Select/Move에서 double-click 또는 Enter로 기존 text를 ID 변경 없이 편집한다.
+8. Select/Move는 click/Shift+click/marquee, batch move/delete, corner resize,
+   Shift 제약, Space pan, 숫자 그룹 전환을 지원한다.
+9. mask는 0.1~1 opacity를 저장하고 canvas와 `overlay.svg`에서 동일하게 표시한다.
+10. pen은 별도 설정 UI 없이 pointer coalescing, endpoint 보존 smoothing,
+    dot/짧은 stroke 보존을 기본 적용한다.
 
 ### 성공 기준
 

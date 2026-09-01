@@ -25,6 +25,15 @@ import {
 import { SessionNotFoundError, TaskNotFoundError, NoActiveCaptureError } from '../application/errors.js';
 import { UnsupportedUrlError } from '../application/url-policy.js';
 import { InvalidSessionTransitionError } from '@redpen/protocol/state-machine';
+import { AnnotatorStoreError } from '@redpen/annotator-core';
+import { z } from 'zod';
+import {
+  annotationMarkCreateRequestSchema,
+  annotationMarkDeleteRequestSchema,
+  annotationMarkReassignRequestSchema,
+  annotationMarkUpdateRequestSchema,
+  annotationMaskStyleRequestSchema,
+} from '@redpen/protocol/schema';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isBundledRuntime = path.basename(__dirname) === 'dist';
@@ -51,8 +60,13 @@ export interface StartedDaemon {
 }
 
 function errorToHttpStatus(err: unknown): number {
+  if (err instanceof AnnotatorStoreError) {
+    if (err.code === 'mark_not_found' || err.code === 'group_not_found') return 404;
+    if (err.code === 'group_not_empty' || err.code === 'last_group' || err.code === 'group_reference_limit') return 409;
+    return 400;
+  }
   if (err instanceof SessionNotFoundError || err instanceof TaskNotFoundError || err instanceof AnnotationGroupNotFoundError) return 404;
-  if (err instanceof UnsupportedUrlError || err instanceof InvalidSessionTransitionError || err instanceof InvalidJsonBodyError || err instanceof InvalidReferenceImageError || err instanceof MissingAttachedReferenceError) return 400;
+  if (err instanceof UnsupportedUrlError || err instanceof InvalidSessionTransitionError || err instanceof InvalidJsonBodyError || err instanceof InvalidReferenceImageError || err instanceof MissingAttachedReferenceError || err instanceof z.ZodError) return 400;
   if (err instanceof UnsupportedMediaTypeError) return 415;
   if (err instanceof RequestBodyTooLargeError || err instanceof ReferenceImageTooLargeError) return 413;
   if (err instanceof NoActiveCaptureError || err instanceof GroupReferenceLimitError || err instanceof AnnotationSubmissionInProgressError) return 409;
@@ -314,14 +328,36 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
         }
 
         if (req.method === 'POST' && sub.length === 1 && sub[0] === 'marks') {
-          const body = (await readJsonBody(req)) as Parameters<typeof service.addMark>[1];
+          const body = annotationMarkCreateRequestSchema.parse(await readJsonBody(req));
           const mark = service.addMark(sessionId, body);
           send(200, { mark });
           return;
         }
 
-        if (req.method === 'DELETE' && sub.length === 2 && sub[0] === 'marks') {
-          service.removeMark(sessionId, sub[1]);
+        if (req.method === 'PATCH' && sub.length === 1 && sub[0] === 'marks') {
+          const body = annotationMarkUpdateRequestSchema.parse(await readJsonBody(req));
+          service.updateAnnotationMarks(sessionId, body.marks);
+          send(200, { ok: true });
+          return;
+        }
+
+        if (req.method === 'POST' && sub.length === 2 && sub[0] === 'marks' && sub[1] === 'reassign') {
+          const body = annotationMarkReassignRequestSchema.parse(await readJsonBody(req));
+          service.reassignAnnotationMarks(sessionId, body.markIds, body.groupId);
+          send(200, { ok: true });
+          return;
+        }
+
+        if (req.method === 'DELETE' && sub.length === 1 && sub[0] === 'marks') {
+          const body = annotationMarkDeleteRequestSchema.parse(await readJsonBody(req));
+          service.deleteAnnotationMarks(sessionId, body.markIds);
+          send(200, { ok: true });
+          return;
+        }
+
+        if (req.method === 'PATCH' && sub.length === 2 && sub[0] === 'marks' && sub[1] === 'mask-style') {
+          const body = annotationMaskStyleRequestSchema.parse(await readJsonBody(req));
+          service.updateAnnotationMaskStyle(sessionId, body.markIds, body.opacity);
           send(200, { ok: true });
           return;
         }
@@ -339,6 +375,12 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
         if (req.method === 'POST' && sub.length === 1 && sub[0] === 'groups') {
           const group = service.createAnnotationGroup(sessionId);
           send(200, { group });
+          return;
+        }
+
+        if (req.method === 'DELETE' && sub.length === 2 && sub[0] === 'groups' && sub[1]) {
+          service.deleteAnnotationGroup(sessionId, sub[1]);
+          send(200, { ok: true });
           return;
         }
 
@@ -401,7 +443,9 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
       const status = errorToHttpStatus(err);
       send(status, err instanceof MissingAttachedReferenceError
         ? { error: 'missing_attached_reference', message: err.message }
-        : status === 500 ? { error: 'internal_error' } : { error: 'bad_request' });
+        : err instanceof AnnotatorStoreError
+          ? { error: err.code, message: err.message }
+          : status === 500 ? { error: 'internal_error' } : { error: 'bad_request' });
     }
   });
   service.onBrowserClosed(() => {

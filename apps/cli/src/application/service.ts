@@ -24,7 +24,13 @@ import {
   type ReferenceImageMeta,
 } from '@redpen/protocol/references';
 import { collectDomIndex, captureAndGround, assembleVisualTask } from '@redpen/grounding';
-import { AnnotatorStore, renderOverlaySvg, type NewMarkInput } from '@redpen/annotator-core';
+import {
+  AnnotatorStore,
+  AnnotatorStoreError,
+  renderOverlaySvg,
+  type NewMarkInput,
+  type MarkUpdate,
+} from '@redpen/annotator-core';
 import { compositeMarksOntoScreenshot } from '@redpen/annotator-core/composite';
 import { createRevision } from '@redpen/review';
 
@@ -99,6 +105,7 @@ export class RedpenApplicationService {
   private selfOrigin: { port: number } | undefined;
   private readonly capabilities = new Map<string, { overlay?: string; annotator?: string }>();
   private readonly referenceMutationTails = new Map<string, Promise<void>>();
+  private readonly lifecycleMutationTails = new Map<string, Promise<void>>();
   private readonly sessionReferenceIds = new Map<string, Set<string>>();
   private readonly submittingSessions = new Set<string>();
   private readonly initializedReferenceWorkspaces = new Set<string>();
@@ -114,6 +121,16 @@ export class RedpenApplicationService {
     this.referenceMutationTails.set(sessionId, tail);
     return current.finally(() => {
       if (this.referenceMutationTails.get(sessionId) === tail) this.referenceMutationTails.delete(sessionId);
+    });
+  }
+
+  private enqueueLifecycleMutation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.lifecycleMutationTails.get(sessionId) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(operation);
+    const tail = current.then(() => undefined, () => undefined);
+    this.lifecycleMutationTails.set(sessionId, tail);
+    return current.finally(() => {
+      if (this.lifecycleMutationTails.get(sessionId) === tail) this.lifecycleMutationTails.delete(sessionId);
     });
   }
 
@@ -217,51 +234,55 @@ export class RedpenApplicationService {
 
   /** "화면 고정" (docs/ARCHITECTURE.md §4.2): capture screenshot + DOM index at the same moment. */
   async freeze(sessionId: string): Promise<VisualSession> {
-    const session = await this.getSession(sessionId);
-    const page = this.runtime.getPage(sessionId);
-    if (!page) throw new SessionNotFoundError(sessionId);
+    this.assertAnnotationMutable(sessionId);
+    return this.enqueueLifecycleMutation(sessionId, async () => {
+      this.assertAnnotationMutable(sessionId);
+      const session = await this.getSession(sessionId);
+      const page = this.runtime.getPage(sessionId);
+      if (!page) throw new SessionNotFoundError(sessionId);
 
-    const transition = session.state === 'review' ? 'annotate-revision' : 'freeze';
-    const nextState = nextSessionState(session.state, transition);
-    const domIndex = await collectDomIndex(page as Page);
-    // Captures the entire scrollable page, not just the currently visible
-    // viewport, so the annotation UI shows the whole page at once instead
-    // of forcing the user to scroll while marking it up.
-    // Grounding at submit time still re-scans the live page's CURRENT
-    // viewport (docs/ARCHITECTURE.md §4.3's collector is viewport-scoped
-    // by design, and Phase 3's tests assert that scoping), so marks drawn
-    // far below the fold ground best when the live page is scrolled back
-    // near that position before submit — a known trade-off, not a
-    // regression.
-    const screenshot = await page.screenshot({ fullPage: true });
-    const viewport = page.viewportSize() ?? { width: 1280, height: 900 };
-    const fullPageHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+      const transition = session.state === 'review' ? 'annotate-revision' : 'freeze';
+      const nextState = nextSessionState(session.state, transition);
+      const domIndex = await collectDomIndex(page as Page);
+      // Captures the entire scrollable page, not just the currently visible
+      // viewport, so the annotation UI shows the whole page at once instead
+      // of forcing the user to scroll while marking it up.
+      // Grounding at submit time still re-scans the live page's CURRENT
+      // viewport (docs/ARCHITECTURE.md §4.3's collector is viewport-scoped
+      // by design, and Phase 3's tests assert that scoping), so marks drawn
+      // far below the fold ground best when the live page is scrolled back
+      // near that position before submit — a known trade-off, not a
+      // regression.
+      const screenshot = await page.screenshot({ fullPage: true });
+      const viewport = page.viewportSize() ?? { width: 1280, height: 900 };
+      const fullPageHeight = await page.evaluate(() => document.documentElement.scrollHeight);
 
-    this.runtime.setCapture(sessionId, {
-      frameId: generateFrameId(),
-      screenshot,
-      domIndex,
-      viewport: { width: viewport.width, height: fullPageHeight, deviceScaleFactor: domIndex.viewport.deviceScaleFactor },
-      scroll: domIndex.scroll,
-      capturedAt: domIndex.capturedAt,
+      this.runtime.setCapture(sessionId, {
+        frameId: generateFrameId(),
+        screenshot,
+        domIndex,
+        viewport: { width: viewport.width, height: fullPageHeight, deviceScaleFactor: domIndex.viewport.deviceScaleFactor },
+        scroll: domIndex.scroll,
+        capturedAt: domIndex.capturedAt,
+      });
+      this.stores.set(sessionId, new AnnotatorStore());
+      this.globalNotes.delete(sessionId);
+
+      session.state = nextState;
+      session.updatedAt = new Date().toISOString();
+      await saveSession(session);
+
+      if (this.selfOrigin) {
+        const sessionCapabilities = this.capabilities.get(sessionId);
+        if (!sessionCapabilities) throw new SessionNotFoundError(sessionId);
+        const capability = randomUUID();
+        sessionCapabilities.annotator = capability;
+        const annotatorUrl = `http://127.0.0.1:${this.selfOrigin.port}/annotator/${sessionId}?token=${capability}`;
+        await this.browser.openAnnotatorTab(sessionId, annotatorUrl);
+      }
+
+      return session;
     });
-    this.stores.set(sessionId, new AnnotatorStore());
-    this.globalNotes.delete(sessionId);
-
-    session.state = nextState;
-    session.updatedAt = new Date().toISOString();
-    await saveSession(session);
-
-    if (this.selfOrigin) {
-      const sessionCapabilities = this.capabilities.get(sessionId);
-      if (!sessionCapabilities) throw new SessionNotFoundError(sessionId);
-      const capability = randomUUID();
-      sessionCapabilities.annotator = capability;
-      const annotatorUrl = `http://127.0.0.1:${this.selfOrigin.port}/annotator/${sessionId}?token=${capability}`;
-      await this.browser.openAnnotatorTab(sessionId, annotatorUrl);
-    }
-
-    return session;
   }
 
   getAnnotatorStore(sessionId: string): AnnotatorStore {
@@ -289,6 +310,8 @@ export class RedpenApplicationService {
       globalNote: this.globalNotes.get(sessionId),
       emptyGroups: store.findEmptyGroups(),
       canSubmit: store.canSubmit(),
+      canUndo: store.canUndo(),
+      canRedo: store.canRedo(),
     };
   }
 
@@ -394,13 +417,36 @@ export class RedpenApplicationService {
 
   addMark(sessionId: string, input: NewMarkInput) {
     this.assertAnnotationMutable(sessionId);
+    const capture = this.runtime.getCapture(sessionId);
+    if (!capture) throw new NoActiveCaptureError(sessionId);
+    if (input.frameId !== capture.frameId) {
+      throw new AnnotatorStoreError(
+        'invalid_annotation_mutation',
+        `mark frameId must match the active capture: ${capture.frameId}`,
+      );
+    }
     const store = this.getAnnotatorStore(sessionId);
     return store.addMark(input);
   }
 
-  removeMark(sessionId: string, markId: string): void {
+  updateAnnotationMarks(sessionId: string, marks: readonly MarkUpdate[]): void {
     this.assertAnnotationMutable(sessionId);
-    this.getAnnotatorStore(sessionId).removeMark(markId);
+    this.getAnnotatorStore(sessionId).updateMarks(marks);
+  }
+
+  reassignAnnotationMarks(sessionId: string, markIds: readonly string[], groupId: string): void {
+    this.assertAnnotationMutable(sessionId);
+    this.getAnnotatorStore(sessionId).reassignMarks(markIds, groupId);
+  }
+
+  deleteAnnotationMarks(sessionId: string, markIds: readonly string[]): void {
+    this.assertAnnotationMutable(sessionId);
+    this.getAnnotatorStore(sessionId).deleteMarks(markIds);
+  }
+
+  updateAnnotationMaskStyle(sessionId: string, markIds: readonly string[], opacity: number): void {
+    this.assertAnnotationMutable(sessionId);
+    this.getAnnotatorStore(sessionId).updateMaskStyle(markIds, opacity);
   }
 
   undoAnnotation(sessionId: string): boolean {
@@ -416,6 +462,11 @@ export class RedpenApplicationService {
   createAnnotationGroup(sessionId: string) {
     this.assertAnnotationMutable(sessionId);
     return this.getAnnotatorStore(sessionId).createGroup();
+  }
+
+  deleteAnnotationGroup(sessionId: string, groupId: string): void {
+    this.assertAnnotationMutable(sessionId);
+    this.getAnnotatorStore(sessionId).deleteGroup(groupId);
   }
 
   setActiveAnnotationGroup(sessionId: string, groupId: string): void {
@@ -455,16 +506,19 @@ export class RedpenApplicationService {
   async submit(sessionId: string, globalNote?: string): Promise<{ session: VisualSession; taskId: string; cleanupWarnings?: string[] }> {
     this.assertAnnotationMutable(sessionId);
     this.submittingSessions.add(sessionId);
-    try {
-      await (this.referenceMutationTails.get(sessionId) ?? Promise.resolve());
-      return await this.submitReady(sessionId, globalNote);
-    } finally {
-      this.submittingSessions.delete(sessionId);
-    }
+    return this.enqueueLifecycleMutation(sessionId, async () => {
+      try {
+        await (this.referenceMutationTails.get(sessionId) ?? Promise.resolve());
+        return await this.submitReady(sessionId, globalNote);
+      } finally {
+        this.submittingSessions.delete(sessionId);
+      }
+    });
   }
 
   private async submitReady(sessionId: string, globalNote?: string): Promise<{ session: VisualSession; taskId: string; cleanupWarnings?: string[] }> {
     const session = await this.getSession(sessionId);
+    const submittedState = nextSessionState(session.state, 'submit');
     const capture = this.runtime.getCapture(sessionId);
     const store = this.stores.get(sessionId);
     if (!capture || !store) throw new NoActiveCaptureError(sessionId);
@@ -507,12 +561,16 @@ export class RedpenApplicationService {
         throw new MissingAttachedReferenceError(reference.id);
       }
     }));
+    const groupsWithTargets = store.getGroups().map((group) => ({
+      ...group,
+      targetIds: targets.filter((target) => target.groupIds.includes(group.id)).map((target) => target.id),
+    }));
     const task = parentTaskId
       ? createRevision({
           newTaskId: taskId,
           parentTask: await readTaskBundle(session.workspaceRoot, parentTaskId),
           frame,
-          groups: store.getGroups(),
+          groups: groupsWithTargets,
           marks: store.getMarks(),
           targets,
           references,
@@ -523,7 +581,7 @@ export class RedpenApplicationService {
           sessionId,
           workspaceRoot: session.workspaceRoot,
           frame,
-          groups: store.getGroups(),
+          groups: groupsWithTargets,
           marks: store.getMarks(),
           targets,
           references,
@@ -540,7 +598,7 @@ export class RedpenApplicationService {
       ...referenceFiles,
     ]);
 
-    session.state = nextSessionState(session.state, 'submit');
+    session.state = submittedState;
     session.activeTaskId = taskId;
     session.updatedAt = new Date().toISOString();
     await saveSession(session);
@@ -616,30 +674,34 @@ export class RedpenApplicationService {
   }
 
   async markReviewReady(sessionId: string): Promise<VisualSession> {
-    const session = await this.getSession(sessionId);
-    const nextState = nextSessionState(session.state, 'implementation-ready');
-    let page = this.runtime.getPage(sessionId);
-    if (page && !page.isClosed()) {
-      await this.browser.reloadPage(sessionId);
-    } else if (this.selfOrigin) {
-      let capabilities = this.capabilities.get(sessionId);
-      if (!capabilities) {
-        capabilities = {};
-        this.capabilities.set(sessionId, capabilities);
+    this.assertAnnotationMutable(sessionId);
+    return this.enqueueLifecycleMutation(sessionId, async () => {
+      this.assertAnnotationMutable(sessionId);
+      const session = await this.getSession(sessionId);
+      const nextState = nextSessionState(session.state, 'implementation-ready');
+      let page = this.runtime.getPage(sessionId);
+      if (page && !page.isClosed()) {
+        await this.browser.reloadPage(sessionId);
+      } else if (this.selfOrigin) {
+        let capabilities = this.capabilities.get(sessionId);
+        if (!capabilities) {
+          capabilities = {};
+          this.capabilities.set(sessionId, capabilities);
+        }
+        const overlayCapability = capabilities.overlay || randomUUID();
+        capabilities.overlay = overlayCapability;
+        page = await this.browser.openPage(sessionId, session.targetUrl, {
+          port: this.selfOrigin.port,
+          token: overlayCapability,
+        });
+        this.runtime.setPage(sessionId, page);
       }
-      const overlayCapability = capabilities.overlay || randomUUID();
-      capabilities.overlay = overlayCapability;
-      page = await this.browser.openPage(sessionId, session.targetUrl, {
-        port: this.selfOrigin.port,
-        token: overlayCapability,
-      });
-      this.runtime.setPage(sessionId, page);
-    }
 
-    session.state = nextState;
-    session.updatedAt = new Date().toISOString();
-    await saveSession(session);
-    return session;
+      session.state = nextState;
+      session.updatedAt = new Date().toISOString();
+      await saveSession(session);
+      return session;
+    });
   }
 
   async accept(sessionId: string): Promise<VisualSession> {
@@ -651,33 +713,39 @@ export class RedpenApplicationService {
   }
 
   private async transition(sessionId: string, transition: Parameters<typeof nextSessionState>[1]): Promise<VisualSession> {
-    const session = await this.getSession(sessionId);
-    session.state = nextSessionState(session.state, transition);
-    session.updatedAt = new Date().toISOString();
-    await saveSession(session);
-    if (session.state === 'done' || session.state === 'cancelled') this.revokeBrowserCapabilities(sessionId);
-    return session;
+    this.assertAnnotationMutable(sessionId);
+    return this.enqueueLifecycleMutation(sessionId, async () => {
+      this.assertAnnotationMutable(sessionId);
+      const session = await this.getSession(sessionId);
+      session.state = nextSessionState(session.state, transition);
+      session.updatedAt = new Date().toISOString();
+      await saveSession(session);
+      if (session.state === 'done' || session.state === 'cancelled') this.revokeBrowserCapabilities(sessionId);
+      return session;
+    });
   }
 
   async closeSession(sessionId: string): Promise<void> {
     this.assertAnnotationMutable(sessionId);
     this.submittingSessions.add(sessionId);
-    try {
-      await (this.referenceMutationTails.get(sessionId) ?? Promise.resolve());
-      const session = await this.getSession(sessionId);
-      await this.browser.closePage(sessionId);
-      this.runtime.remove(sessionId);
-      this.stores.delete(sessionId);
-      this.globalNotes.delete(sessionId);
-      this.revokeBrowserCapabilities(sessionId);
-      const cleanupFailures = await this.cleanupSessionReferences(sessionId, session.workspaceRoot);
-      if (cleanupFailures.length > 0) {
-        throw new Error(`failed to clean staged references: ${cleanupFailures.join(', ')}`);
+    return this.enqueueLifecycleMutation(sessionId, async () => {
+      try {
+        await (this.referenceMutationTails.get(sessionId) ?? Promise.resolve());
+        const session = await this.getSession(sessionId);
+        await this.browser.closePage(sessionId);
+        this.runtime.remove(sessionId);
+        this.stores.delete(sessionId);
+        this.globalNotes.delete(sessionId);
+        this.revokeBrowserCapabilities(sessionId);
+        const cleanupFailures = await this.cleanupSessionReferences(sessionId, session.workspaceRoot);
+        if (cleanupFailures.length > 0) {
+          throw new Error(`failed to clean staged references: ${cleanupFailures.join(', ')}`);
+        }
+        await deleteSession(sessionId);
+      } finally {
+        this.submittingSessions.delete(sessionId);
       }
-      await deleteSession(sessionId);
-    } finally {
-      this.submittingSessions.delete(sessionId);
-    }
+    });
   }
 
   async shutdown(): Promise<void> {

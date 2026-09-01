@@ -8,7 +8,7 @@ The agent receives a self-contained task bundle containing screenshots, vector m
 
 - Pixel-accurate screenshot and DOM capture from the same browser state
 - Multiple color-coded instruction groups (`#1`, `#2`, ...)
-- Pen, arrow, straight line, rectangle, ellipse, bounded text, mask, eraser, and cut/move patch tools
+- Select/Move, pen, arrow, straight line, rectangle, ellipse, bounded text, adjustable-opacity mask, and eraser tools
 - Up to three pasted or drag-and-dropped reference images per instruction group
 - Reference images stay in the right sidebar and are never stamped onto the screenshot
 - Modal-aware capture and DOM grounding
@@ -16,6 +16,7 @@ The agent receives a self-contained task bundle containing screenshots, vector m
 - Automatic target-page refresh when a change enters review
 - CLI and MCP interfaces backed by the same daemon
 - English UI by default with a persistent Korean language switch
+- Compact retro desktop chrome inspired by classic paint utilities
 - Local workspace storage only; no database or cloud service
 
 ## Workflow
@@ -47,7 +48,7 @@ Redpen installs its dedicated Playwright Chromium during package installation.
 Install the latest GitHub release globally:
 
 ```bash
-npm install -g https://github.com/Benzenp/redpen/releases/download/v0.1.1/redpen-cli-0.1.1.tgz
+npm install -g https://github.com/Benzenp/redpen/releases/download/v0.2.0/redpen-cli-0.2.0.tgz
 ```
 
 Verify the daemon:
@@ -145,6 +146,7 @@ Images can be pasted into the active group or dropped onto a specific group card
 ### Text tool
 
 Drag a rectangle to create a bounded text editor. Text wraps and clips inside that region and uses the current instruction-group color.
+Click once for an immediately editable default text box. In Select/Move, double-click a text mark or select it and press Enter to edit it without changing its identity or group.
 
 - `Ctrl/Cmd + Enter`: commit
 - Blur: commit
@@ -154,6 +156,7 @@ Drag a rectangle to create a bounded text editor. Text wraps and clips inside th
 
 | Key | Tool |
 | --- | --- |
+| `V` | Select/move marks or a screenshot region |
 | `P` | Pen |
 | `A` | Arrow |
 | `L` | Straight line |
@@ -161,10 +164,30 @@ Drag a rectangle to create a bounded text editor. Text wraps and clips inside th
 | `O` | Ellipse |
 | `T` | Text area |
 | `M` | Mask |
-| `C` | Cut/move patch |
 | `E` | Eraser |
+| `Delete` / `Backspace` | Delete selected marks |
+| `Escape` | Cancel the current drawing or clear selection |
+| `1`–`9` | Switch instruction group without changing tools |
+| Hold `Space` + drag | Pan the canvas |
 | `Ctrl/Cmd + Z` | Undo |
 | `Ctrl/Cmd + Shift + Z` | Redo |
+
+### Select/Move
+
+Select/Move is the default tool. It handles normal annotation marks and screenshot pixel moves through one interaction model:
+
+- Click or Shift-click marks to select them.
+- Drag selected marks to move them.
+- Drag a corner handle to resize; hold Shift to preserve the original ratio.
+- Drag blank screenshot space to create a region, then drag that region to create a cut/move patch.
+- Existing patches move and resize without changing their source crop.
+- Hold Shift while creating lines or arrows for 45° snapping, rectangles for squares, and ellipses for circles.
+
+Inactive instruction groups remain visible at reduced opacity. Clicking one of their marks activates and focuses the corresponding group.
+
+### Mask opacity
+
+Choose Mask to reveal its compact opacity slider. New masks use the selected opacity; selecting existing masks before adjusting the slider updates them as one undoable action.
 
 ## Task bundle
 
@@ -243,4 +266,4 @@ skills/
 
 ## Status
 
-Redpen is a production-packaged local developer tool at version `0.1.1`. The CLI package is ready to pack and publish; no external service is required.
+Redpen is a production-packaged local developer tool at version `0.2.0`. The CLI package is ready to pack and publish; no external service is required.

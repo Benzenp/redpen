@@ -194,31 +194,41 @@ DB 없이 워크스페이스 폴더에 영구 저장한다:
 
 ### 어노테이션 UI (`apps/annotator/src/session-client.ts`, `apps/annotator/public/session.html`)
 
-`ToolName`에 `'patch'`와 `'image'`를 추가하고 툴바에 두 버튼(단축키 C/I)을 추가했다.
+`V` Select/Move를 기본 도구로 사용한다. `patch`는 task schema의 픽셀 이동
+마크로 계속 유지하지만 전용 툴과 `C` 단축키는 제거했다.
 
-**patch 도구 — 2단계 드래그**:
+**Select/Move 통합 patch 흐름**:
 
-1. 1차 드래그로 원본 영역을 선택하면 `patchSourceRect`에 저장하고, 커밋하지 않은 채 점선 사각형으로 화면에 계속 표시한다(`isAwaitingPatchDestination()`으로 조회 가능, 다른 도구로 전환하면 `cancelPendingPatch()`로 취소됨).
-2. 2차 드래그로 목적지를 지정하면 그 순간 실제 스크린샷 픽셀이 커서를 따라 잘려서 미리보기되고(`ctx.drawImage`로 소스 사각형 → 목적지 사각형 직접 그리기), 드롭 시 `patch` 마크로 커밋된다.
-3. 커밋된 patch 마크는 렌더 시 항상 `ctx.drawImage(screenshotImage, sourceRect..., bounds...)`로 실제 픽셀을 그린다 — 벡터 아웃라인이 아니라 정확한 "cut and paste" 미리보기.
+1. 빈 스크린샷 영역을 드래그했는데 활성 그룹 mark와 겹치지 않으면 서버에
+   저장하지 않는 영역 selection을 만든다.
+2. 그 영역을 드래그하면 `sourceRect`를 원본으로, 이동된 bounds를 목적지로 하는
+   `patch` 마크를 한 번에 커밋한다.
+3. 생성된 patch는 자동 선택되며 일반 mark처럼 이동, 모서리 resize, Delete,
+   undo/redo가 가능하다. 기존 patch의 이동/resize는 목적지 bounds만 바꾸며
+   `sourceRect`는 바꾸지 않는다.
+4. Shift+resize는 기존 목적지 비율을 유지한다. selection과 resize handle은
+   UI 상태이며 task schema에는 저장하지 않는다.
 
-**image 도구 — 붙여넣기/드롭다운 + 배치 드래그**:
+일반 mark도 같은 Select/Move에서 click, Shift+click, marquee, multi-move,
+corner resize, batch Delete와 그룹 재지정을 지원한다. 한 gesture는 완전한 mark
+배열을 원자적으로 갱신하며 undo history 한 항목만 만든다.
 
-1. `Ctrl+V`(image 도구 활성 상태에서 `paste` 이벤트 리스닝)로 클립보드 이미지를 감지하면 `pasteReferenceImage(blob)`가 daemon에 base64로 업로드하고, 반환된 레퍼런스를 다음 배치의 `pendingImageAssetRef`로 큐에 넣는다.
-2. 사이드바 `<select id="reference-select">` 드롭다운은 `listReferenceLibrary()`로 채워지며, 항목 선택 시 `setPendingImageAsset(reference)`가 (필요하면 daemon에서 fetch해) 같은 큐에 넣는다.
-3. 큐에 이미지가 있는 상태에서 캔버스를 드래그하면 그 이미지가 커서를 따라 미리보기되고, 드롭 시 `image` 마크(`assetRef` 포함)로 커밋된다. 하나 배치하면 큐는 비워진다 — 다시 붙여넣거나 선택해야 다음 배치가 가능하다.
-4. 커밋된 image 마크는 렌더 시 클라이언트 사이드 `assetImageCache`(Map)에서 이미지를 찾아 그린다. 캐시에 없으면(페이지 새로고침 등) 회색 placeholder를 먼저 그리고 백그라운드에서 `getReferenceImageBlob`으로 로드 후 재렌더링한다.
+레퍼런스 이미지는 canvas mark가 아니다. 붙여넣기/drag-drop한 이미지는 현재
+Instruction Group의 `referenceIds`에 즉시 귀속되고 sidebar thumbnail로만 보인다.
 
 ### overlay.svg (`packages/annotator-core/src/export-svg.ts`)
 
 - `patch`: 목적지 사각형(`<rect>`) + 원본 중심점에서 목적지 중심점으로 향하는 점선 화살표(`stroke-dasharray`) — 실제 픽셀이 아니라 "어디서 어디로 옮겼는지"를 벡터로 요약하는 참고용 표시.
-- `image`: 목적지 사각형에 `fill-opacity` 낮춘 placeholder + `data-asset-ref` 속성(순수 함수라 실제 자산 파일을 열어 임베드하지 않음).
+- `mask`: mark별 `opacity` 값을 `fill-opacity`로 내보낸다.
 
 ### 검증
 
-- 신규 단위 테스트: `packages/protocol/src/schema.test.ts`(patch/image 라운드트립), `packages/protocol/src/references.test.ts`(저장/목록/읽기), `packages/annotator-core/src/composite.test.ts`(patch 픽셀 복사가 소스를 오염시키지 않음, image 배치, 자산 누락 시 스킵), `packages/annotator-core/src/export-svg.test.ts`(patch/image SVG 렌더). 전체 72개 단위 테스트 통과.
-- 신규 e2e 스크립트 `apps/cli/src/patch-image-e2e-check.ts`(임시 검증용, 영구 체크 스위트에는 미등록)로 headless 브라우저에서 실제 2단계 patch 드래그, 클립보드 붙여넣기 시뮬레이션, image 배치 드래그, submit까지 재현. 제출된 task bundle의 `marks`에 `patch`/`image` 타입이 포함됨을 확인하고, `annotated.png`가 `source.png`와 바이트 단위로 다름(`sourcePng.equals(annotatedPng) === false`)을 직접 파일 비교로 확인 — 실제 픽셀 편집이 이루어졌음을 증명.
-- 기존 자동 체크 4종(`lifecycle-check`, `review-loop-check`, `daemon-lifecycle-check`, `ui-e2e-check`) `REDPEN_HEADLESS=1`로 전부 재실행, ALL CHECKS PASSED — 특히 `ui-e2e-check`는 annotator UI의 `boot()` 함수 변경(레퍼런스 드롭다운 초기화 추가) 과정에서 최초 구현이 `await refreshReferenceDropdown()`를 submit 버튼 리스너 등록 앞에 동기적으로 배치해 그 호출이 지연/실패하면 이후 모든 이벤트 리스너 등록이 막히는 회귀를 만들었고, 실제로 `ui-e2e-check`의 제출 체크가 5초 타임아웃으로 실패하는 것으로 재현/발견했다. `refreshReferenceDropdown()` 호출을 리스너 등록 뒤로 옮기고 `.catch(() => {})`로 격리해 수정, 재실행으로 회귀 해소를 확인했다.
+- `store.test.ts`는 batch update/reassign/delete, immutable undo snapshot, 빈 그룹
+  삭제와 단조 증가 그룹 번호, mask opacity를 검증한다.
+- `ui-e2e-check.ts`는 실제 browser/API에서 Select/Move, modifier, text, pen,
+  mask, 그룹 focus와 retro chrome을 검증한다.
+- `patch-reference-e2e-check.ts`는 빈 영역 selection → patch 이동과 그룹별
+  reference 제출, task bundle PNG/SVG 결과를 함께 검증한다.
 
 ## 9. 현재 설계: 그룹 레퍼런스, 직선, 영역 텍스트
 

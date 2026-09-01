@@ -87,6 +87,7 @@ test('renderOverlaySvg emits one SVG primitive per mark type without throwing', 
     frameId: FRAME,
     bounds: { x: 0, y: 0, width: 30, height: 30 },
     normalizedBounds: { x: 0, y: 0, width: 30, height: 30 },
+    opacity: 0.5,
   });
 
   const svg = renderOverlaySvg({ width: 200, height: 200 }, store.getMarks(), store.getGroups(), []);
@@ -97,6 +98,48 @@ test('renderOverlaySvg emits one SVG primitive per mark type without throwing', 
   assert.equal((svg.match(/<rect/g) ?? []).length, 2); // rectangle mark + mask mark
   assert.match(svg, new RegExp(`<line x1="20" y1="0" x2="70" y2="50" stroke="[^"]+" stroke-width="2" data-mark-id="${line.id}"`));
   assert.doesNotMatch(svg, new RegExp(`data-mark-id="${line.id}"[^>]*marker-end`));
+});
+
+test('renderOverlaySvg preserves each mask opacity with its group color', () => {
+  const store = new AnnotatorStore();
+  const group = store.getGroups()[0];
+  const lowOpacityMask = store.addMark({
+    type: 'mask',
+    frameId: FRAME,
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    normalizedBounds: { x: 0, y: 0, width: 10, height: 10 },
+    opacity: 0.1,
+  });
+  const highOpacityMask = store.addMark({
+    type: 'mask',
+    frameId: FRAME,
+    bounds: { x: 20, y: 0, width: 10, height: 10 },
+    normalizedBounds: { x: 20, y: 0, width: 10, height: 10 },
+    opacity: 0.8,
+  });
+
+  const svg = renderOverlaySvg({ width: 100, height: 100 }, store.getMarks(), store.getGroups(), []);
+
+  assert.match(svg, new RegExp(`fill="${group.color}" fill-opacity="0.1" data-mark-id="${lowOpacityMask.id}"`));
+  assert.match(svg, new RegExp(`fill="${group.color}" fill-opacity="0.8" data-mark-id="${highOpacityMask.id}"`));
+});
+
+test('renderOverlaySvg preserves a one-point pen stroke as a visible dot', () => {
+  const store = new AnnotatorStore();
+  const group = store.getGroups()[0];
+  const dot = store.addMark({
+    type: 'freehand',
+    frameId: FRAME,
+    points: [{ x: 12, y: 34 }],
+    bounds: { x: 12, y: 34, width: 0, height: 0 },
+    normalizedBounds: { x: 0.12, y: 0.34, width: 0, height: 0 },
+  });
+
+  const svg = renderOverlaySvg({ width: 100, height: 100 }, store.getMarks(), store.getGroups(), []);
+  assert.match(
+    svg,
+    new RegExp(`<circle cx="12" cy="34" r="1.5" fill="${group.color}" data-mark-id="${dot.id}"`),
+  );
 });
 
 test('renderOverlaySvg renders patch destinations and source-to-destination indicators', () => {

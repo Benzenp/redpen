@@ -151,6 +151,7 @@ export const textMarkSchema = markBaseSchema.extend({
 
 export const maskMarkSchema = markBaseSchema.extend({
   type: z.literal('mask'),
+  opacity: z.number().min(0.1).max(1),
 });
 
 export const patchMarkSchema = markBaseSchema.extend({
@@ -170,6 +171,49 @@ export const markSchema = z.discriminatedUnion('type', [
 ]);
 export type Mark = z.infer<typeof markSchema>;
 export type MarkBase = z.infer<typeof markBaseSchema>;
+
+export const annotationMarkCreateRequestSchema = z.discriminatedUnion('type', [
+  freehandMarkSchema.omit({ id: true, groupId: true }).strict(),
+  arrowMarkSchema.omit({ id: true, groupId: true }).strict(),
+  lineMarkSchema.omit({ id: true, groupId: true }).strict(),
+  rectangleMarkSchema.omit({ id: true, groupId: true }).strict(),
+  ellipseMarkSchema.omit({ id: true, groupId: true }).strict(),
+  textMarkSchema.omit({ id: true, groupId: true }).strict(),
+  maskMarkSchema.omit({ id: true, groupId: true }).strict(),
+  patchMarkSchema.omit({ id: true, groupId: true }).strict(),
+]);
+export type AnnotationMarkCreateRequest = z.infer<typeof annotationMarkCreateRequestSchema>;
+
+const markIdListSchema = z.array(z.string().min(1)).min(1).max(200).refine(
+  (ids) => new Set(ids).size === ids.length,
+  { message: 'markIds must be unique' },
+);
+
+/** Request contracts for atomic annotator selection mutations. */
+export const annotationMarkUpdateRequestSchema = z.object({
+  marks: z.array(markSchema).min(1).max(200).refine(
+    (marks) => new Set(marks.map((mark) => mark.id)).size === marks.length,
+    { message: 'mark IDs must be unique' },
+  ),
+}).strict();
+export type AnnotationMarkUpdateRequest = z.infer<typeof annotationMarkUpdateRequestSchema>;
+
+export const annotationMarkReassignRequestSchema = z.object({
+  markIds: markIdListSchema,
+  groupId: z.string().min(1),
+}).strict();
+export type AnnotationMarkReassignRequest = z.infer<typeof annotationMarkReassignRequestSchema>;
+
+export const annotationMarkDeleteRequestSchema = z.object({
+  markIds: markIdListSchema,
+}).strict();
+export type AnnotationMarkDeleteRequest = z.infer<typeof annotationMarkDeleteRequestSchema>;
+
+export const annotationMaskStyleRequestSchema = z.object({
+  markIds: markIdListSchema,
+  opacity: z.number().min(0.1).max(1),
+}).strict();
+export type AnnotationMaskStyleRequest = z.infer<typeof annotationMaskStyleRequestSchema>;
 
 // computedLayout allowlist per docs/ARCHITECTURE.md §6.
 export const COMPUTED_LAYOUT_ALLOWLIST = [
@@ -256,6 +300,74 @@ export const visualTaskSchema = z.object({
   marks: z.array(markSchema),
   targets: z.array(domTargetSchema),
 }).superRefine((task, context) => {
+  const addDuplicateIssues = (values: readonly { id: string }[], path: 'frames' | 'groups' | 'marks' | 'targets') => {
+    const ids = new Set<string>();
+    for (let index = 0; index < values.length; index++) {
+      if (ids.has(values[index].id)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: [path, index, 'id'], message: `${path} IDs must be unique` });
+      }
+      ids.add(values[index].id);
+    }
+    return ids;
+  };
+  const frameIds = addDuplicateIssues(task.frames, 'frames');
+  const groupIds = addDuplicateIssues(task.groups, 'groups');
+  const markIds = addDuplicateIssues(task.marks, 'marks');
+  const targetIds = addDuplicateIssues(task.targets, 'targets');
+
+  const indexedGroupMarkIds = new Map<string, string>();
+  const indexedGroupTargetIds = new Map<string, string>();
+  for (let groupIndex = 0; groupIndex < task.groups.length; groupIndex++) {
+    const group = task.groups[groupIndex];
+    for (const markId of group.markIds) {
+      if (!markIds.has(markId)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['groups', groupIndex, 'markIds'], message: `group mark is missing: ${markId}` });
+      } else if (indexedGroupMarkIds.has(markId)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['groups', groupIndex, 'markIds'], message: `mark belongs to multiple groups: ${markId}` });
+      }
+      indexedGroupMarkIds.set(markId, group.id);
+    }
+    for (const targetId of group.targetIds) {
+      if (!targetIds.has(targetId)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['groups', groupIndex, 'targetIds'], message: `group target is missing: ${targetId}` });
+      } else if (indexedGroupTargetIds.has(`${group.id}:${targetId}`)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['groups', groupIndex, 'targetIds'], message: `group target IDs must be unique: ${targetId}` });
+      }
+      const target = task.targets.find((candidate) => candidate.id === targetId);
+      if (target && !target.groupIds.includes(group.id)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['groups', groupIndex, 'targetIds'], message: `target groupIds disagree with group ownership: ${targetId}` });
+      }
+      indexedGroupTargetIds.set(`${group.id}:${targetId}`, group.id);
+    }
+  }
+  for (let markIndex = 0; markIndex < task.marks.length; markIndex++) {
+    const mark = task.marks[markIndex];
+    if (!frameIds.has(mark.frameId)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['marks', markIndex, 'frameId'], message: `mark frame is missing: ${mark.frameId}` });
+    }
+    if (!groupIds.has(mark.groupId)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['marks', markIndex, 'groupId'], message: `mark group is missing: ${mark.groupId}` });
+    }
+    if (indexedGroupMarkIds.get(mark.id) !== mark.groupId) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['marks', markIndex, 'groupId'], message: `group markIds disagree with mark ownership: ${mark.id}` });
+    }
+  }
+  for (let targetIndex = 0; targetIndex < task.targets.length; targetIndex++) {
+    const target = task.targets[targetIndex];
+    if (!frameIds.has(target.frameId)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['targets', targetIndex, 'frameId'], message: `target frame is missing: ${target.frameId}` });
+    }
+    for (const groupId of target.groupIds) {
+      if (!groupIds.has(groupId)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['targets', targetIndex, 'groupIds'], message: `target group is missing: ${groupId}` });
+      }
+      const group = task.groups.find((candidate) => candidate.id === groupId);
+      if (!group?.targetIds.includes(target.id)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['targets', targetIndex, 'groupIds'], message: `group targetIds disagree with target ownership: ${target.id}` });
+      }
+    }
+  }
+
   const referenceIds = new Set<string>();
   for (let index = 0; index < task.references.length; index++) {
     const id = task.references[index].id;

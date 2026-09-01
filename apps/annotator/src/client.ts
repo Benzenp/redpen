@@ -95,8 +95,8 @@ export class AnnotatorApp {
     return mark;
   }
 
-  removeMark(markId: string): void {
-    this.store.removeMark(markId);
+  deleteMarks(markIds: readonly string[]): void {
+    this.store.deleteMarks(markIds);
     this.render();
   }
 

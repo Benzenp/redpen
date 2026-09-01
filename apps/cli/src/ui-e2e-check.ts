@@ -19,7 +19,7 @@ import os from 'node:os';
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { chromium } from 'playwright';
+import { chromium, type Browser, type Page } from 'playwright';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -87,10 +87,35 @@ async function stopDaemonIfRunning(appDataDir: string): Promise<void> {
   }
 }
 
+async function screenshotPoint(page: Page, x: number, y: number): Promise<{ x: number; y: number }> {
+  return page.evaluate(({ x, y }) => {
+    const app = (window as unknown as { __redpenSessionApp: { scale: number; panX: number; panY: number } }).__redpenSessionApp;
+    return { x: x * app.scale + app.panX, y: y * app.scale + app.panY };
+  }, { x, y });
+}
+
+async function dragScreenshot(
+  page: Page,
+  canvasBox: { x: number; y: number },
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  shift = false,
+): Promise<void> {
+  const start = await screenshotPoint(page, from.x, from.y);
+  const end = await screenshotPoint(page, to.x, to.y);
+  if (shift) await page.keyboard.down('Shift');
+  await page.mouse.move(canvasBox.x + start.x, canvasBox.y + start.y);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox.x + end.x, canvasBox.y + end.y, { steps: 6 });
+  await page.mouse.up();
+  if (shift) await page.keyboard.up('Shift');
+}
+
 async function main() {
   const server = await startStaticServer(fixturePath);
   const appDataDir = await mkdtemp(path.join(os.tmpdir(), 'redpen-ui-e2e-appdata-'));
   const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'redpen-ui-e2e-ws-'));
+  let pwBrowser: Browser | null = null;
   // Headless=true here (this check runs in CI too) — the point of this test
   // is that a real Playwright-controlled tab exists and is API-connected,
   // not that a human is actually watching it.
@@ -114,7 +139,7 @@ async function main() {
     // drives a fresh Playwright page against the exact same daemon HTTP API
     // and static assets that tab uses — proving the full server route /
     // bundle / canvas-rendering / submit wiring end-to-end regardless.
-    const pwBrowser = await chromium.launch({ headless: true });
+    pwBrowser = await chromium.launch({ headless: true });
     const page = await pwBrowser.newPage({ viewport: { width: 1280, height: 900 } });
     await page.setExtraHTTPHeaders({ Authorization: `Bearer ${discovery.token}` });
     const annotatorUrl = `http://127.0.0.1:${discovery.port}/annotator/${sessionId}`;
@@ -139,10 +164,14 @@ async function main() {
       lang: document.documentElement.lang,
       submit: document.getElementById('submit-button')?.textContent,
       lineTitle: document.querySelector('[data-tool="line"]')?.getAttribute('title'),
+      maskOpacityLabel: document.getElementById('mask-opacity-label')?.textContent,
     }));
     record(
       'language-switch-translates-the-annotator-to-korean',
-      koreanLocale.lang === 'ko' && koreanLocale.submit === '지시 제출' && koreanLocale.lineTitle === '직선 (L)',
+      koreanLocale.lang === 'ko' &&
+        koreanLocale.submit === '지시 제출' &&
+        koreanLocale.lineTitle === '직선 (L)' &&
+        koreanLocale.maskOpacityLabel === '마스크 투명도',
       JSON.stringify(koreanLocale),
     );
     await page.reload({ waitUntil: 'load' });
@@ -159,6 +188,161 @@ async function main() {
     const box = await canvas.boundingBox();
     if (!box) throw new Error('canvas has no bounding box');
 
+    const retroChrome = await page.evaluate(() => {
+      const toolbarElement = document.querySelector('#toolbar');
+      const titleElement = document.querySelector('#paint-titlebar');
+      const statusElement = document.querySelector('#paint-statusbar');
+      const paletteElement = document.querySelector('#retro-palette');
+      const toolbar = toolbarElement ? getComputedStyle(toolbarElement) : null;
+      const title = titleElement ? getComputedStyle(titleElement) : null;
+      const status = statusElement ? getComputedStyle(statusElement) : null;
+      const palette = paletteElement ? getComputedStyle(paletteElement) : null;
+      return {
+        toolbarDisplay: toolbar?.display,
+        toolbarColumns: toolbar?.gridTemplateColumns,
+        toolbarBorderStyle: toolbar?.borderStyle,
+        toolbarRadius: toolbar?.borderRadius,
+        titleBackground: title?.backgroundColor,
+        statusBottom: status?.bottom,
+        paletteDisplay: palette?.display,
+      };
+    });
+    record(
+      'retro-chrome-uses-square-outset-toolbar-blue-title-and-bottom-status-palette',
+      Boolean(
+        retroChrome.toolbarDisplay === 'grid' &&
+        retroChrome.toolbarColumns?.includes('30px') &&
+        retroChrome.toolbarBorderStyle?.includes('outset') &&
+        retroChrome.toolbarRadius === '0px' &&
+        retroChrome.titleBackground === 'rgb(0, 0, 128)' &&
+        retroChrome.statusBottom === '0px' &&
+        retroChrome.paletteDisplay === 'grid',
+      ),
+      JSON.stringify(retroChrome),
+    );
+    const defaultSelect = await page.evaluate(() => {
+      const app = (window as unknown as { __redpenSessionApp: { tool: string; state: { marks: unknown[] } } }).__redpenSessionApp;
+      return {
+        tool: app.tool,
+        marks: app.state.marks.length,
+        undoDisabled: (document.getElementById('undo-button') as HTMLButtonElement).disabled,
+        redoDisabled: (document.getElementById('redo-button') as HTMLButtonElement).disabled,
+      };
+    });
+    await page.keyboard.press('c');
+    const cNoOp = await page.evaluate(() => {
+      const app = (window as unknown as { __redpenSessionApp: { tool: string; state: { marks: unknown[] } } }).__redpenSessionApp;
+      return { tool: app.tool, marks: app.state.marks.length };
+    });
+    record(
+      'select-is-default-and-c-is-a-no-op',
+      defaultSelect.tool === 'select' &&
+        defaultSelect.undoDisabled &&
+        defaultSelect.redoDisabled &&
+        cNoOp.tool === 'select' &&
+        cNoOp.marks === defaultSelect.marks,
+      JSON.stringify({ defaultSelect, cNoOp }),
+    );
+
+    // Shift constraints are asserted from server-backed mark state, not from
+    // a presumed CSS-pixel-to-screenshot mapping.
+    await page.click('#toolbar button[data-tool="rectangle"]');
+    await dragScreenshot(page, box, { x: 300, y: 260 }, { x: 370, y: 300 }, true);
+    await page.waitForFunction(() => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length === 1);
+    await page.click('#toolbar button[data-tool="ellipse"]');
+    await dragScreenshot(page, box, { x: 450, y: 260 }, { x: 520, y: 305 }, true);
+    await page.waitForFunction(() => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length === 2);
+    await page.click('#toolbar button[data-tool="line"]');
+    await dragScreenshot(page, box, { x: 600, y: 260 }, { x: 670, y: 300 }, true);
+    await page.waitForFunction(() => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length === 3);
+    await page.click('#toolbar button[data-tool="arrow"]');
+    await dragScreenshot(page, box, { x: 750, y: 260 }, { x: 820, y: 300 }, true);
+    await page.waitForFunction(() => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length === 4);
+    const constrainedMarks = await page.evaluate(() => {
+      const marks = ((window as any).__redpenSessionApp.state.marks) as Array<{
+        type: string;
+        bounds: { width: number; height: number };
+        from?: { x: number; y: number };
+        to?: { x: number; y: number };
+      }>;
+      return Object.fromEntries(marks.map((mark) => [mark.type, mark]));
+    });
+    const is45 = (mark: { from?: { x: number; y: number }; to?: { x: number; y: number } }) =>
+      Boolean(mark.from && mark.to && Math.abs(Math.abs(mark.to.x - mark.from.x) - Math.abs(mark.to.y - mark.from.y)) < 0.01);
+    record(
+      'shift-constrains-rectangle-ellipse-line-and-arrow',
+      Math.abs(constrainedMarks.rectangle.bounds.width - constrainedMarks.rectangle.bounds.height) < 0.01 &&
+        Math.abs(constrainedMarks.ellipse.bounds.width - constrainedMarks.ellipse.bounds.height) < 0.01 &&
+        is45(constrainedMarks.line) && is45(constrainedMarks.arrow),
+      JSON.stringify(constrainedMarks),
+    );
+
+    await page.click('#toolbar button[data-tool="pen"]');
+    await dragScreenshot(page, box, { x: 80, y: 430 }, { x: 80, y: 430 });
+    await page.waitForFunction(() => (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ type: string }> } } }).__redpenSessionApp.state.marks.filter((mark) => mark.type === 'freehand').length === 1);
+    await dragScreenshot(page, box, { x: 120, y: 430 }, { x: 185, y: 445 });
+    await page.waitForFunction(() => (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ type: string }> } } }).__redpenSessionApp.state.marks.filter((mark) => mark.type === 'freehand').length === 2);
+    const penMarks = await page.evaluate(() => (window as unknown as {
+      __redpenSessionApp: { state: { marks: Array<{ type: string; points?: Array<{ x: number; y: number }> }> } };
+    }).__redpenSessionApp.state.marks.filter((mark) => mark.type === 'freehand'));
+    record(
+      'pen-commits-dot-short-stroke-final-endpoint-and-smoothed-samples',
+      penMarks[0]?.points?.length === 1 &&
+        penMarks[1]?.points?.length !== undefined &&
+        penMarks[1].points.length < 8 &&
+        Math.abs(penMarks[1].points.at(-1)!.x - 185) < 0.01,
+      JSON.stringify(penMarks),
+    );
+    await page.click('#toolbar button[data-tool="mask"]');
+    await page.locator('#mask-opacity').fill('0.3');
+    await dragScreenshot(page, box, { x: 240, y: 430 }, { x: 320, y: 480 });
+    await page.waitForFunction(() => (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ type: string }> } } }).__redpenSessionApp.state.marks.some((mark) => mark.type === 'mask'));
+    const maskBefore = await page.evaluate(() => (window as unknown as {
+      __redpenSessionApp: { state: { marks: Array<{ id: string; type: string; opacity?: number }> } };
+    }).__redpenSessionApp.state.marks.find((mark) => mark.type === 'mask')!);
+    await page.keyboard.press('v');
+    const maskCenter = await screenshotPoint(page, 280, 455);
+    await page.mouse.click(box.x + maskCenter.x, box.y + maskCenter.y);
+    await page.click('#toolbar button[data-tool="mask"]');
+    await page.locator('#mask-opacity').evaluate((element) => {
+      const input = element as HTMLInputElement;
+      for (const value of ['0.4', '0.6', '0.7']) {
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await page.waitForFunction(({ id }) => {
+      const app = (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ id: string; opacity?: number }> } } }).__redpenSessionApp;
+      return app.state.marks.find((mark) => mark.id === id)?.opacity === 0.7;
+    }, { id: maskBefore.id });
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(({ id }) => {
+      const app = (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ id: string; opacity?: number }> } } }).__redpenSessionApp;
+      return app.state.marks.find((mark) => mark.id === id)?.opacity === 0.3;
+    }, { id: maskBefore.id });
+    await page.keyboard.press('Control+Shift+z');
+    await page.waitForFunction(({ id }) => {
+      const app = (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ id: string; opacity?: number }> } } }).__redpenSessionApp;
+      return app.state.marks.find((mark) => mark.id === id)?.opacity === 0.7;
+    }, { id: maskBefore.id });
+    record(
+      'mask-uses-creation-opacity-and-one-undo-entry-per-slider-gesture',
+      maskBefore.opacity === 0.3,
+      JSON.stringify({ before: maskBefore, after: await page.evaluate((id) => (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ id: string; opacity?: number }> } } }).__redpenSessionApp.state.marks.find((mark) => mark.id === id), maskBefore.id) }),
+    );
+    const marksBeforeEscape = await page.evaluate(() => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length);
+    await page.click('#toolbar button[data-tool="rectangle"]');
+    const escapeStart = await screenshotPoint(page, 350, 430);
+    const escapeEnd = await screenshotPoint(page, 410, 480);
+    await page.mouse.move(box.x + escapeStart.x, box.y + escapeStart.y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + escapeEnd.x, box.y + escapeEnd.y);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await page.waitForFunction((count) => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length === count, marksBeforeEscape);
+    record('escape-cancels-in-progress-drawing-without-mutation', true, `marks=${marksBeforeEscape}`);
+
     // (300,300)-(450,400) is well clear of the top-left #toolbar overlay,
     // which sits at top:12px/left:12px on top of the canvas and would
     // otherwise swallow pointer events aimed at small top-left coordinates.
@@ -172,7 +356,11 @@ async function main() {
     const markCountAfterDraw = await page.evaluate(
       () => (window as unknown as { __redpenSessionApp: { state: { marks: unknown[] } } }).__redpenSessionApp.state.marks.length,
     );
-    record('pointer-drag-creates-a-rectangle-mark-via-real-api-roundtrip', markCountAfterDraw === 1, `marks=${markCountAfterDraw}`);
+    record(
+      'pointer-drag-creates-a-rectangle-mark-via-real-api-roundtrip',
+      markCountAfterDraw === marksBeforeEscape + 1,
+      `before=${marksBeforeEscape} after=${markCountAfterDraw}`,
+    );
     const rectangleCoordinates = await page.evaluate(() => {
       const app = (window as unknown as {
         __redpenSessionApp: {
@@ -200,7 +388,7 @@ async function main() {
       `bounds=${JSON.stringify(rectangleCoordinates.mark.bounds)} normalized=${JSON.stringify(rectangleCoordinates.mark.normalizedBounds)}`,
     );
 
-    // --- pan (shift+drag) and zoom (wheel) actually change the transform ---
+    // --- pan uses Space-drag; Shift remains available for drawing constraints ---
     const scaleBefore = await page.evaluate(() => (window as unknown as { __redpenSessionApp: { scale: number } }).__redpenSessionApp.scale);
     await page.mouse.move(box.x + 200, box.y + 200);
     await page.mouse.wheel(0, -200); // zoom in
@@ -209,14 +397,23 @@ async function main() {
     record('wheel-zoom-changes-scale', scaleAfter !== scaleBefore, `before=${scaleBefore} after=${scaleAfter}`);
 
     const panBefore = await page.evaluate(() => (window as unknown as { __redpenSessionApp: { panX: number } }).__redpenSessionApp.panX);
-    await page.keyboard.down('Shift');
+    await page.keyboard.down('Space');
     await page.mouse.move(box.x + 400, box.y + 400);
     await page.mouse.down();
     await page.mouse.move(box.x + 480, box.y + 430, { steps: 5 });
     await page.mouse.up();
-    await page.keyboard.up('Shift');
+    await page.keyboard.up('Space');
     const panAfter = await page.evaluate(() => (window as unknown as { __redpenSessionApp: { panX: number } }).__redpenSessionApp.panX);
-    record('shift-drag-pans-the-canvas', panAfter !== panBefore, `before=${panBefore} after=${panAfter}`);
+    record('space-drag-pans-the-canvas', panAfter !== panBefore, `before=${panBefore} after=${panAfter}`);
+
+    await page.keyboard.press('v');
+    const selectChrome = await page.evaluate(() => ({
+      defaultTool: (window as unknown as { __redpenSessionApp: { tool: string } }).__redpenSessionApp.tool,
+      selectButton: Boolean(document.querySelector('[data-tool="select"]')),
+      patchButton: Boolean(document.querySelector('[data-tool="patch"]')),
+      cShortcut: document.querySelector('[data-tool="patch"]') === null,
+    }));
+    record('v-selects-and-patch-c-tool-is-absent', selectChrome.defaultTool === 'select' && selectChrome.selectButton && !selectChrome.patchButton && selectChrome.cShortcut, JSON.stringify(selectChrome));
 
     // --- Ctrl+Z / Ctrl+Shift+Z keyboard shortcuts drive real undo/redo ---
     const marksBeforeKeyboardUndo = await page.evaluate(
@@ -242,6 +439,194 @@ async function main() {
       'ctrl-shift-z-keyboard-shortcut-redoes-the-mark',
       marksAfterKeyboardRedo === marksBeforeKeyboardUndo,
       `before=${marksBeforeKeyboardUndo} after=${marksAfterKeyboardRedo}`,
+    );
+
+    // --- Select/Move keeps IDs stable and batches multi-selection actions ---
+    await page.keyboard.press('v');
+    const selectionFixtures = await page.evaluate(() => {
+      const marks = (window as any).__redpenSessionApp.state.marks as Array<{
+        id: string;
+        type: string;
+        groupId: string;
+        bounds: { x: number; y: number; width: number; height: number };
+      }>;
+      const rectangles = marks.filter((mark) => mark.type === 'rectangle');
+      return {
+        rectangle: structuredClone(
+          rectangles.find((mark) => Math.abs(mark.bounds.width / mark.bounds.height - 1) > 0.1) ?? rectangles[0],
+        ),
+        ellipse: structuredClone(marks.find((mark) => mark.type === 'ellipse')!),
+      };
+    });
+    const rectangleCenter = {
+      x: selectionFixtures.rectangle.bounds.x + selectionFixtures.rectangle.bounds.width / 2,
+      y: selectionFixtures.rectangle.bounds.y + selectionFixtures.rectangle.bounds.height / 2,
+    };
+    const ellipseCenter = {
+      x: selectionFixtures.ellipse.bounds.x + selectionFixtures.ellipse.bounds.width / 2,
+      y: selectionFixtures.ellipse.bounds.y + selectionFixtures.ellipse.bounds.height / 2,
+    };
+    const rectangleCenterCanvas = await screenshotPoint(page, rectangleCenter.x, rectangleCenter.y);
+    const ellipseCenterCanvas = await screenshotPoint(page, ellipseCenter.x, ellipseCenter.y);
+    await page.mouse.click(box.x + rectangleCenterCanvas.x, box.y + rectangleCenterCanvas.y);
+    await page.keyboard.down('Shift');
+    await page.mouse.click(box.x + ellipseCenterCanvas.x, box.y + ellipseCenterCanvas.y);
+    await page.keyboard.up('Shift');
+    const selectedAfterShiftClick = await page.evaluate(
+      () => [...((window as any).__redpenSessionApp.selectedMarkIds as Set<string>)],
+    );
+    record(
+      'shift-click-builds-an-active-group-multi-selection',
+      selectedAfterShiftClick.length === 2 &&
+        selectedAfterShiftClick.includes(selectionFixtures.rectangle.id) &&
+        selectedAfterShiftClick.includes(selectionFixtures.ellipse.id),
+      JSON.stringify(selectedAfterShiftClick),
+    );
+
+    await page.keyboard.press('Delete');
+    await page.waitForFunction(
+      (ids) => ids.every((id) => !(window as any).__redpenSessionApp.state.marks.some((mark: { id: string }) => mark.id === id)),
+      [selectionFixtures.rectangle.id, selectionFixtures.ellipse.id],
+    );
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(
+      (ids) => ids.every((id) => (window as any).__redpenSessionApp.state.marks.some((mark: { id: string }) => mark.id === id)),
+      [selectionFixtures.rectangle.id, selectionFixtures.ellipse.id],
+    );
+    record('batch-delete-and-one-undo-restore-all-selected-mark-ids', true, selectedAfterShiftClick.join(','));
+
+    await page.mouse.click(box.x + rectangleCenterCanvas.x, box.y + rectangleCenterCanvas.y);
+    await dragScreenshot(
+      page,
+      box,
+      rectangleCenter,
+      { x: rectangleCenter.x + 60, y: rectangleCenter.y + 24 },
+    );
+    await page.waitForFunction(
+      ({ id, x }) => (window as any).__redpenSessionApp.state.marks.find((mark: { id: string }) => mark.id === id)?.bounds.x > x,
+      { id: selectionFixtures.rectangle.id, x: selectionFixtures.rectangle.bounds.x },
+    );
+    const movedRectangle = await page.evaluate(
+      (id) => structuredClone((window as any).__redpenSessionApp.state.marks.find((mark: { id: string }) => mark.id === id)),
+      selectionFixtures.rectangle.id,
+    );
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(
+      ({ id, bounds }) => JSON.stringify((window as any).__redpenSessionApp.state.marks.find((mark: { id: string }) => mark.id === id)?.bounds) === JSON.stringify(bounds),
+      { id: selectionFixtures.rectangle.id, bounds: selectionFixtures.rectangle.bounds },
+    );
+    record(
+      'move-preserves-mark-id-group-and-undo-restores-exact-geometry',
+      movedRectangle.id === selectionFixtures.rectangle.id &&
+        movedRectangle.groupId === selectionFixtures.rectangle.groupId,
+      JSON.stringify({ before: selectionFixtures.rectangle, moved: movedRectangle }),
+    );
+
+    const originalSe = {
+      x: selectionFixtures.rectangle.bounds.x + selectionFixtures.rectangle.bounds.width,
+      y: selectionFixtures.rectangle.bounds.y + selectionFixtures.rectangle.bounds.height,
+    };
+    await page.mouse.click(box.x + rectangleCenterCanvas.x, box.y + rectangleCenterCanvas.y);
+    await dragScreenshot(page, box, originalSe, { x: originalSe.x + 55, y: originalSe.y + 12 }, true);
+    await page.waitForFunction(
+      ({ id, width }) => (window as any).__redpenSessionApp.state.marks.find((mark: { id: string }) => mark.id === id)?.bounds.width > width,
+      { id: selectionFixtures.rectangle.id, width: selectionFixtures.rectangle.bounds.width },
+    );
+    const resizedRectangle = await page.evaluate(
+      (id) => structuredClone((window as any).__redpenSessionApp.state.marks.find((mark: { id: string }) => mark.id === id)),
+      selectionFixtures.rectangle.id,
+    );
+    const originalRatio = selectionFixtures.rectangle.bounds.width / selectionFixtures.rectangle.bounds.height;
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(
+      ({ id, bounds }) => JSON.stringify((window as any).__redpenSessionApp.state.marks.find((mark: { id: string }) => mark.id === id)?.bounds) === JSON.stringify(bounds),
+      { id: selectionFixtures.rectangle.id, bounds: selectionFixtures.rectangle.bounds },
+    );
+    record(
+      'shift-resize-preserves-original-aspect-and-stable-id',
+      resizedRectangle.id === selectionFixtures.rectangle.id &&
+        Math.abs(resizedRectangle.bounds.width / resizedRectangle.bounds.height - originalRatio) < 0.001,
+      JSON.stringify({ originalRatio, resized: resizedRectangle.bounds }),
+    );
+
+    await page.mouse.click(box.x + rectangleCenterCanvas.x, box.y + rectangleCenterCanvas.y);
+    await dragScreenshot(
+      page,
+      box,
+      rectangleCenter,
+      { x: rectangleCenter.x + 70, y: rectangleCenter.y + 28 },
+      true,
+    );
+    await page.waitForFunction(
+      ({ id, x }) => (window as any).__redpenSessionApp.state.marks.find((mark: { id: string }) => mark.id === id)?.bounds.x > x,
+      { id: selectionFixtures.rectangle.id, x: selectionFixtures.rectangle.bounds.x },
+    );
+    const axisLockedRectangle = await page.evaluate(
+      (id) => structuredClone((window as any).__redpenSessionApp.state.marks.find((mark: { id: string }) => mark.id === id)),
+      selectionFixtures.rectangle.id,
+    );
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(
+      ({ id, bounds }) => JSON.stringify((window as any).__redpenSessionApp.state.marks.find((mark: { id: string }) => mark.id === id)?.bounds) === JSON.stringify(bounds),
+      { id: selectionFixtures.rectangle.id, bounds: selectionFixtures.rectangle.bounds },
+    );
+    record(
+      'shift-move-locks-the-dominant-axis',
+      Math.abs(axisLockedRectangle.bounds.y - selectionFixtures.rectangle.bounds.y) < 0.01,
+      JSON.stringify(axisLockedRectangle.bounds),
+    );
+
+    const marqueeStart = {
+      x: Math.min(selectionFixtures.rectangle.bounds.x, selectionFixtures.ellipse.bounds.x) - 30,
+      y: Math.min(selectionFixtures.rectangle.bounds.y, selectionFixtures.ellipse.bounds.y) - 30,
+    };
+    const marqueeEnd = {
+      x: Math.max(
+        selectionFixtures.rectangle.bounds.x + selectionFixtures.rectangle.bounds.width,
+        selectionFixtures.ellipse.bounds.x + selectionFixtures.ellipse.bounds.width,
+      ) + 30,
+      y: Math.max(
+        selectionFixtures.rectangle.bounds.y + selectionFixtures.rectangle.bounds.height,
+        selectionFixtures.ellipse.bounds.y + selectionFixtures.ellipse.bounds.height,
+      ) + 30,
+    };
+    await dragScreenshot(page, box, marqueeStart, marqueeEnd);
+    const marqueeSelected = await page.evaluate(
+      () => [...((window as any).__redpenSessionApp.selectedMarkIds as Set<string>)],
+    );
+    record(
+      'marquee-selects-intersecting-active-group-marks',
+      marqueeSelected.includes(selectionFixtures.rectangle.id) && marqueeSelected.includes(selectionFixtures.ellipse.id),
+      JSON.stringify(marqueeSelected),
+    );
+
+    await page.mouse.click(box.x + rectangleCenterCanvas.x, box.y + rectangleCenterCanvas.y);
+    await page.mouse.move(box.x + rectangleCenterCanvas.x, box.y + rectangleCenterCanvas.y);
+    const moveCursor = await canvas.evaluate((element) => (element as HTMLCanvasElement).style.cursor);
+    const seCanvas = await screenshotPoint(page, originalSe.x, originalSe.y);
+    await page.mouse.move(box.x + seCanvas.x, box.y + seCanvas.y);
+    const resizeCursor = await canvas.evaluate((element) => (element as HTMLCanvasElement).style.cursor);
+    await page.keyboard.down('Space');
+    const spaceCursor = await canvas.evaluate((element) => (element as HTMLCanvasElement).style.cursor);
+    await page.keyboard.up('Space');
+    record(
+      'select-cursor-reflects-move-resize-and-space-pan',
+      moveCursor === 'move' && resizeCursor.includes('resize') && spaceCursor === 'grab',
+      JSON.stringify({ moveCursor, resizeCursor, spaceCursor }),
+    );
+    await page.mouse.move(box.x + rectangleCenterCanvas.x, box.y + rectangleCenterCanvas.y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + rectangleCenterCanvas.x + 45, box.y + rectangleCenterCanvas.y + 20, { steps: 4 });
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    const rectangleAfterCancelledMove = await page.evaluate(
+      (id) => (window as any).__redpenSessionApp.state.marks.find((mark: { id: string }) => mark.id === id),
+      selectionFixtures.rectangle.id,
+    );
+    record(
+      'escape-cancels-an-in-progress-move-without-persistence',
+      JSON.stringify(rectangleAfterCancelledMove.bounds) === JSON.stringify(selectionFixtures.rectangle.bounds),
+      JSON.stringify(rectangleAfterCancelledMove.bounds),
     );
 
     // --- erase tool removes a mark via a real click on it ---
@@ -334,6 +719,11 @@ async function main() {
     );
 
     // --- straight line is distinct from an arrow and has no head ---
+    const lineCountBeforeLegacyCheck = await page.evaluate(
+      () => (window as unknown as {
+        __redpenSessionApp: { state: { marks: Array<{ type: string }> } };
+      }).__redpenSessionApp.state.marks.filter((mark) => mark.type === 'line').length,
+    );
     await page.click('#toolbar button[data-tool="line"]');
     await page.mouse.move(box.x + 620, box.y + 180);
     await page.mouse.down();
@@ -345,7 +735,11 @@ async function main() {
         __redpenSessionApp: { state: { marks: Array<{ type: string }> } };
       }).__redpenSessionApp.state.marks.filter((mark) => mark.type === 'line').length,
     );
-    record('line-tool-commits-a-straight-line-mark', lineMarkCount === 1, `lineMarks=${lineMarkCount}`);
+    record(
+      'line-tool-commits-a-straight-line-mark',
+      lineMarkCount === lineCountBeforeLegacyCheck + 1,
+      `before=${lineCountBeforeLegacyCheck} after=${lineMarkCount}`,
+    );
     await page.click('#toolbar button[data-tool="erase"]');
     await page.mouse.click(box.x + 630, box.y + 235);
     await page.waitForTimeout(100);
@@ -363,7 +757,7 @@ async function main() {
     );
     record(
       'eraser-hits-line-stroke-not-its-empty-bounding-box',
-      lineCountAfterFarErase === 1 && lineCountAfterStrokeErase === 0,
+      lineCountAfterFarErase === lineCountBeforeLegacyCheck + 1 && lineCountAfterStrokeErase === lineCountBeforeLegacyCheck,
       `far=${lineCountAfterFarErase} stroke=${lineCountAfterStrokeErase}`,
     );
     await page.click('#toolbar button[data-tool="line"]');
@@ -384,7 +778,7 @@ async function main() {
     );
     record(
       'drawing-in-panned-blank-canvas-does-not-create-an-edge-line',
-      lineCountAfterBlankGesture === 1,
+      lineCountAfterBlankGesture === lineCountBeforeLegacyCheck + 1,
       `lineMarks=${lineCountAfterBlankGesture}`,
     );
 
@@ -432,6 +826,46 @@ async function main() {
         textMarkState.color === '#dc2626',
       `editorColor=${editorColor} mark=${JSON.stringify(textMarkState.mark)}`,
     );
+    const editableText = await page.evaluate(() => {
+      const app = (window as any).__redpenSessionApp as {
+        state: { marks: Array<{ id: string; type: string; groupId: string; text?: string; bounds: { x: number; y: number; width: number; height: number } }> };
+      };
+      return app.state.marks.find((mark) => mark.type === 'text')!;
+    });
+    await page.keyboard.press('v');
+    const editablePoint = await screenshotPoint(page, editableText.bounds.x + 12, editableText.bounds.y + 12);
+    await page.mouse.dblclick(box.x + editablePoint.x, box.y + editablePoint.y);
+    await textEditor.waitFor({ state: 'visible' });
+    await textEditor.fill('편집된 텍스트');
+    await textEditor.press('Control+Enter');
+    await page.waitForFunction(({ id }) => {
+      const app = (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ id: string; text?: string }> } } }).__redpenSessionApp;
+      return app.state.marks.find((mark) => mark.id === id)?.text === '편집된 텍스트';
+    }, { id: editableText.id });
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(({ id, text }) => {
+      const app = (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ id: string; text?: string }> } } }).__redpenSessionApp;
+      return app.state.marks.find((mark) => mark.id === id)?.text === text;
+    }, { id: editableText.id, text: editableText.text });
+    await page.keyboard.press('Control+Shift+z');
+    await page.waitForFunction((id) => {
+      const app = (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ id: string; text?: string }> } } }).__redpenSessionApp;
+      return app.state.marks.find((mark) => mark.id === id)?.text === '편집된 텍스트';
+    }, editableText.id);
+    const editedText = await page.evaluate((id) => {
+      const app = (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ id: string; groupId: string; text?: string }> } } }).__redpenSessionApp;
+      return app.state.marks.find((mark) => mark.id === id);
+    }, editableText.id);
+    record(
+      'select-double-click-text-edit-preserves-id-group-and-one-step-undo',
+      editedText?.id === editableText.id && editedText.groupId === editableText.groupId && editedText.text === '편집된 텍스트',
+      JSON.stringify({ before: editableText, after: editedText }),
+    );
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(({ id, text }) => {
+      const app = (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ id: string; text?: string }> } } }).__redpenSessionApp;
+      return app.state.marks.find((mark) => mark.id === id)?.text === text;
+    }, { id: editableText.id, text: editableText.text });
 
     // --- create a second instruction group via the real sidebar button ---
     await page.click('#new-instruction');
@@ -451,6 +885,69 @@ async function main() {
     await page.mouse.move(box.x + 570, box.y + 550, { steps: 5 });
     await page.mouse.up();
     await page.waitForTimeout(200);
+    const groupSwitchSetup = await page.evaluate(() => {
+      const app = (window as any).__redpenSessionApp as {
+        tool: string;
+        state: {
+          groups: Array<{ id: string; number: number }>;
+          marks: Array<{ groupId: string; bounds: { x: number; y: number } }>;
+        };
+      };
+      return { tool: app.tool, groups: app.state.groups, group1Mark: app.state.marks.find((mark) => mark.groupId === app.state.groups[0].id) };
+    });
+    await page.keyboard.press('1');
+    await page.waitForFunction(() => (window as unknown as { __redpenSessionApp: { state: { activeGroupId: string; groups: Array<{ id: string; number: number }> } } }).__redpenSessionApp.state.activeGroupId === (window as unknown as { __redpenSessionApp: { state: { groups: Array<{ id: string; number: number }> } } }).__redpenSessionApp.state.groups[0].id);
+    const toolAfterNumericGroupSwitch = await page.evaluate(() => (window as unknown as { __redpenSessionApp: { tool: string } }).__redpenSessionApp.tool);
+    const inactiveMarkPoint = await screenshotPoint(page, groupSwitchSetup.group1Mark!.bounds.x + 4, groupSwitchSetup.group1Mark!.bounds.y + 4);
+    await page.keyboard.press('2');
+    await page.waitForFunction(() => (window as unknown as { __redpenSessionApp: { state: { activeGroupId: string; groups: Array<{ id: string }> } } }).__redpenSessionApp.state.activeGroupId === (window as unknown as { __redpenSessionApp: { state: { groups: Array<{ id: string }> } } }).__redpenSessionApp.state.groups[1].id);
+    await page.keyboard.press('v');
+    await page.mouse.click(box.x + inactiveMarkPoint.x, box.y + inactiveMarkPoint.y);
+    await page.waitForFunction((groupId) => (window as unknown as { __redpenSessionApp: { state: { activeGroupId: string } } }).__redpenSessionApp.state.activeGroupId === groupId, groupSwitchSetup.groups[0].id);
+    const groupSwitchState = await page.evaluate(() => {
+      const app = (window as unknown as {
+        __redpenSessionApp: { tool: string; selectedMarkIds: Set<string>; state: { activeGroupId: string } };
+      }).__redpenSessionApp;
+      return { tool: app.tool, activeGroupId: app.state.activeGroupId, selected: [...app.selectedMarkIds] };
+    });
+    record(
+      'numeric-group-switch-retains-tool-and-inactive-mark-click-activates-selects-its-group',
+      groupSwitchSetup.tool === 'ellipse' && toolAfterNumericGroupSwitch === 'ellipse' && groupSwitchState.tool === 'select' && groupSwitchState.activeGroupId === groupSwitchSetup.groups[0].id && groupSwitchState.selected.length === 1,
+      JSON.stringify({ before: groupSwitchSetup, after: groupSwitchState }),
+    );
+    const reassignedMarkId = groupSwitchState.selected[0];
+    await page.selectOption('#selection-group', groupSwitchSetup.groups[1].id);
+    await page.waitForFunction(
+      ({ markId, groupId }) =>
+        (window as any).__redpenSessionApp.state.marks.find((mark: { id: string }) => mark.id === markId)?.groupId === groupId,
+      { markId: reassignedMarkId, groupId: groupSwitchSetup.groups[1].id },
+    );
+    const reassignedState = await page.evaluate((markId) => {
+      const app = (window as any).__redpenSessionApp;
+      return {
+        mark: app.state.marks.find((mark: { id: string }) => mark.id === markId),
+        activeGroupId: app.state.activeGroupId,
+      };
+    }, reassignedMarkId);
+    record(
+      'selection-group-control-reassigns-with-stable-id-and-activates-destination',
+      reassignedState.mark.id === reassignedMarkId &&
+        reassignedState.mark.groupId === groupSwitchSetup.groups[1].id &&
+        reassignedState.activeGroupId === groupSwitchSetup.groups[1].id,
+      JSON.stringify(reassignedState),
+    );
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(
+      ({ markId, groupId }) =>
+        (window as any).__redpenSessionApp.state.marks.find((mark: { id: string }) => mark.id === markId)?.groupId === groupId,
+      { markId: reassignedMarkId, groupId: groupSwitchSetup.groups[0].id },
+    );
+    await page.click(`.group-card[data-group-id="${groupSwitchSetup.groups[1].id}"]`);
+    await page.waitForFunction((groupId) => (window as unknown as { __redpenSessionApp: { state: { activeGroupId: string } } }).__redpenSessionApp.state.activeGroupId === groupId, groupSwitchSetup.groups[1].id);
+    record('group-card-click-focuses-its-mark-region', await page.evaluate(() => {
+      const app = (window as unknown as { __redpenSessionApp: { panX: number; panY: number; state: { activeGroupId: string } } }).__redpenSessionApp;
+      return Number.isFinite(app.panX) && Number.isFinite(app.panY) && Boolean(app.state.activeGroupId);
+    }), `group=${groupSwitchSetup.groups[1].id}`);
 
     // --- type a global note through the real textarea, then submit ---
     await page.fill('#global-note', '실제 UI로 작성한 전체 노트');
@@ -463,6 +960,7 @@ async function main() {
     const taskId = taskIdMatch?.[1];
 
     await pwBrowser.close();
+    pwBrowser = null;
 
     // --- verify via the CLI that the note typed in the real UI was persisted ---
     if (taskId) {
@@ -503,6 +1001,7 @@ async function main() {
     console.error(`\n${allPass ? 'ALL CHECKS PASSED' : 'SOME CHECKS FAILED'}`);
     if (!allPass) process.exitCode = 1;
   } finally {
+    await pwBrowser?.close().catch(() => {});
     await server.close();
     await stopDaemonIfRunning(appDataDir);
     await rm(appDataDir, { recursive: true, force: true }).catch(() => {});

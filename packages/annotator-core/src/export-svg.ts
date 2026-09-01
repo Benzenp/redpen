@@ -30,6 +30,9 @@ function markToSvgElement(mark: Mark, color: string): string {
     case 'line':
       return `<line x1="${mark.from.x}" y1="${mark.from.y}" x2="${mark.to.x}" y2="${mark.to.y}" stroke="${color}" stroke-width="2" data-mark-id="${mark.id}" data-group-id="${mark.groupId}" />`;
     case 'freehand': {
+      if (mark.points.length === 1) {
+        return `<circle cx="${mark.points[0].x}" cy="${mark.points[0].y}" r="1.5" fill="${color}" data-mark-id="${mark.id}" data-group-id="${mark.groupId}" />`;
+      }
       const points = mark.points.map((p) => `${p.x},${p.y}`).join(' ');
       return `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="2" data-mark-id="${mark.id}" data-group-id="${mark.groupId}" />`;
     }
@@ -40,7 +43,7 @@ function markToSvgElement(mark: Mark, color: string): string {
         `</foreignObject>`
       );
     case 'mask':
-      return `<rect x="${mark.bounds.x}" y="${mark.bounds.y}" width="${mark.bounds.width}" height="${mark.bounds.height}" fill="${color}" fill-opacity="1" data-mark-id="${mark.id}" data-group-id="${mark.groupId}" />`;
+      return `<rect x="${mark.bounds.x}" y="${mark.bounds.y}" width="${mark.bounds.width}" height="${mark.bounds.height}" fill="${color}" fill-opacity="${mark.opacity}" data-mark-id="${mark.id}" data-group-id="${mark.groupId}" />`;
     case 'patch': {
       const sourceCenterX = mark.sourceRect.x + mark.sourceRect.width / 2;
       const sourceCenterY = mark.sourceRect.y + mark.sourceRect.height / 2;

@@ -12,7 +12,7 @@
 import type { Mark, InstructionGroup } from '@redpen/protocol/schema';
 import { cssRectToNormalized } from '@redpen/protocol/geometry';
 
-export type ToolName = 'pen' | 'arrow' | 'line' | 'rectangle' | 'ellipse' | 'text' | 'mask' | 'select' | 'erase' | 'patch';
+export type ToolName = 'pen' | 'arrow' | 'line' | 'rectangle' | 'ellipse' | 'text' | 'mask' | 'select' | 'erase';
 
 const ERASE_HIT_RADIUS_PX = 10;
 
@@ -25,6 +25,8 @@ interface AnnotatorState {
   globalNote?: string;
   emptyGroups: Array<{ groupId: string; number: number }>;
   canSubmit: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
 }
 
 interface ApiClientOptions {
@@ -74,8 +76,17 @@ class AnnotatorApiClient {
   addMark(mark: Omit<Mark, 'id' | 'groupId'>): Promise<{ mark: Mark }> {
     return this.request('POST', '/marks', mark);
   }
-  removeMark(markId: string): Promise<void> {
-    return this.request('DELETE', `/marks/${markId}`);
+  updateMarks(marks: Mark[]): Promise<void> {
+    return this.request('PATCH', '/marks', { marks });
+  }
+  updateMaskStyle(markIds: string[], opacity: number): Promise<void> {
+    return this.request('PATCH', '/marks/mask-style', { markIds, opacity });
+  }
+  reassignMarks(markIds: string[], groupId: string): Promise<void> {
+    return this.request('POST', '/marks/reassign', { markIds, groupId });
+  }
+  removeMarks(markIds: string[]): Promise<void> {
+    return this.request('DELETE', '/marks', { markIds });
   }
   undo(): Promise<void> {
     return this.request('POST', '/undo');
@@ -85,6 +96,9 @@ class AnnotatorApiClient {
   }
   createGroup(): Promise<{ group: InstructionGroup }> {
     return this.request('POST', '/groups');
+  }
+  deleteGroup(groupId: string): Promise<void> {
+    return this.request('DELETE', `/groups/${groupId}`);
   }
   setActiveGroup(groupId: string): Promise<void> {
     return this.request('POST', '/active-group', { groupId });
@@ -129,9 +143,10 @@ export class SessionAnnotatorApp {
   private readonly api: AnnotatorApiClient;
   private mutationTail: Promise<void> = Promise.resolve();
   private mutationFailureCount = 0;
+  private pendingMutationCount = 0;
   private loaded = false;
   private submissionPending = false;
-  tool: ToolName = 'pen';
+  tool: ToolName = 'select';
   state: AnnotatorState | null = null;
   /**
    * Called after every server round-trip that can change groups/marks —
@@ -147,19 +162,25 @@ export class SessionAnnotatorApp {
   private panY = 0;
 
   private isPanning = false;
+  private spaceHeld = false;
   private panStart = { x: 0, y: 0 };
   private panOrigin = { x: 0, y: 0 };
 
   private drawing: { points: { x: number; y: number }[] } | null = null;
   private dragStart: { x: number; y: number } | null = null;
 
-  /**
-   * Patch tool is a two-step gesture: drag once to select the source
-   * rectangle to copy, then drag again to place it at a destination \u2014
-   * only the second drag commits a `patch` mark. `patchSourceRect` holds
-   * the first drag's result while awaiting the second.
-   */
-  private patchSourceRect: { x: number; y: number; width: number; height: number } | null = null;
+  private selectedMarkIds = new Set<string>();
+  private selectionBounds: { x: number; y: number; width: number; height: number } | null = null;
+  private selectMode: 'marquee' | 'move' | 'resize' | 'patch' | null = null;
+  private selectOrigin: { x: number; y: number } | null = null;
+  private selectInitialBounds: { x: number; y: number; width: number; height: number } | null = null;
+  private resizeCorner: 'nw' | 'ne' | 'sw' | 'se' | null = null;
+  private selectedAtStart: string[] = [];
+  private selectionAdditive = false;
+  private selectionPressedMarkId: string | null = null;
+  private hoveredGroupId: string | null = null;
+  private pendingMarkOverrides = new Map<string, Mark>();
+  private maskOpacity = 0.5;
   private textEditor: HTMLTextAreaElement | null = null;
   private locale: 'en' | 'ko';
 
@@ -194,6 +215,24 @@ export class SessionAnnotatorApp {
       event.preventDefault();
       void this.addGroupReference(this.state!.activeGroupId, blob).catch(() => {});
     });
+  }
+
+  async focusGroup(groupId: string): Promise<void> {
+    await this.setActiveGroup(groupId);
+    const marks = this.state?.marks.filter((mark) => mark.groupId === groupId) ?? [];
+    if (marks.length === 0) return;
+    const left = Math.min(...marks.map((mark) => mark.bounds.x));
+    const top = Math.min(...marks.map((mark) => mark.bounds.y));
+    const right = Math.max(...marks.map((mark) => mark.bounds.x + mark.bounds.width));
+    const bottom = Math.max(...marks.map((mark) => mark.bounds.y + mark.bounds.height));
+    this.panX = this.opts.canvas.width / 2 - ((left + right) / 2) * this.scale;
+    this.panY = this.opts.canvas.height / 2 - ((top + bottom) / 2) * this.scale;
+    this.render();
+  }
+
+  setHoveredGroup(groupId: string | null): void {
+    this.hoveredGroupId = groupId;
+    this.render();
   }
 
   addGroupReference(groupId: string, blob: Blob): Promise<ReferenceImageMeta> {
@@ -239,6 +278,35 @@ export class SessionAnnotatorApp {
       ) {
         return;
       }
+      if (event.code === 'Space') {
+        this.spaceHeld = true;
+        this.opts.canvas.style.cursor = 'grab';
+        event.preventDefault();
+        return;
+      }
+      if (event.key === 'Escape') {
+        this.cancelTextEditor();
+        this.cancelInteraction();
+        this.selectedMarkIds.clear();
+        this.selectionBounds = null;
+        this.render();
+        return;
+      }
+      if ((event.key === 'Delete' || event.key === 'Backspace') && this.selectedMarkIds.size) { event.preventDefault(); void this.removeMarks([...this.selectedMarkIds]); this.selectedMarkIds.clear(); this.selectionBounds = null; return; }
+      if (event.key === 'Enter' && this.selectedMarkIds.size === 1) {
+        const mark = this.state?.marks.find((candidate) => this.selectedMarkIds.has(candidate.id));
+        if (mark?.type === 'text') { event.preventDefault(); this.openTextEditor(mark.bounds, mark); return; }
+      }
+      if (/^[1-9]$/.test(event.key)) {
+        const group = this.state?.groups.find((candidate) => candidate.number === Number(event.key));
+        if (group) {
+          void this.setActiveGroup(group.id).then(() => {
+            this.setStatus(this.message(`Group #${group.number}`, `그룹 #${group.number}`));
+          });
+        }
+        return;
+      }
+      if (event.key.toLowerCase() === 'v') { this.setTool('select'); return; }
       const meta = event.ctrlKey || event.metaKey;
       if (!meta) return;
       const key = event.key.toLowerCase();
@@ -252,6 +320,17 @@ export class SessionAnnotatorApp {
         event.preventDefault();
         void this.redo();
       }
+    });
+    window.addEventListener('keyup', (event) => {
+      if (event.code === 'Space') {
+        this.spaceHeld = false;
+        if (!this.isPanning) this.opts.canvas.style.cursor = this.tool === 'select' ? 'default' : '';
+      }
+    });
+    window.addEventListener('blur', () => {
+      this.spaceHeld = false;
+      this.cancelInteraction();
+      this.render();
     });
   }
 
@@ -277,7 +356,35 @@ export class SessionAnnotatorApp {
   setTool(tool: ToolName): void {
     if (!this.isInteractionReady()) return;
     this.cancelTextEditor();
+    this.cancelInteraction();
     this.tool = tool;
+    this.opts.canvas.style.cursor = '';
+    this.setStatus(this.message(`${tool === 'select' ? 'Select / Move' : tool} — group ${this.state?.groups.find((group) => group.id === this.state?.activeGroupId)?.number ?? ''}`, `${tool === 'select' ? '선택 / 이동' : tool} — 그룹 ${this.state?.groups.find((group) => group.id === this.state?.activeGroupId)?.number ?? ''}`));
+  }
+
+  previewMaskOpacity(opacity: number): void {
+    this.maskOpacity = Math.max(0.1, Math.min(1, opacity));
+    this.render();
+  }
+
+  commitMaskOpacity(): Promise<void> {
+    const selectedMasks = this.state?.marks.filter((mark) => this.selectedMarkIds.has(mark.id) && mark.type === 'mask') ?? [];
+    if (selectedMasks.length === 0) return Promise.resolve();
+    return this.updateMaskStyle(selectedMasks.map((mark) => mark.id), this.maskOpacity);
+  }
+
+  isMutationInFlight(): boolean {
+    return this.pendingMutationCount > 0;
+  }
+
+  reassignSelection(groupId: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      if (!this.selectedMarkIds.size) return;
+      await this.api.reassignMarks([...this.selectedMarkIds], groupId);
+      await this.api.setActiveGroup(groupId);
+      await this.refresh();
+      this.selectionBounds = this.boundsForSelection();
+    });
   }
 
   private toScreenshotSpace(canvasX: number, canvasY: number): { x: number; y: number } {
@@ -302,7 +409,7 @@ export class SessionAnnotatorApp {
     };
   }
 
-  private canvasPoint(event: PointerEvent | WheelEvent): { x: number; y: number } {
+  private canvasPoint(event: MouseEvent): { x: number; y: number } {
     const rect = this.opts.canvas.getBoundingClientRect();
     return {
       x: (event.clientX - rect.left) * (this.opts.canvas.width / rect.width),
@@ -352,8 +459,9 @@ export class SessionAnnotatorApp {
       if (!this.isInteractionReady()) return;
       const canvasPoint = this.canvasPoint(event);
 
-      if (event.button === 1 || event.shiftKey) {
+      if (event.button === 1 || this.spaceHeld) {
         this.isPanning = true;
+        canvas.style.cursor = 'grabbing';
         canvas.setPointerCapture(event.pointerId);
         this.panStart = canvasPoint;
         this.panOrigin = { x: this.panX, y: this.panY };
@@ -363,18 +471,20 @@ export class SessionAnnotatorApp {
       const point = this.toScreenshotSpace(canvasPoint.x, canvasPoint.y);
       if (!this.isInsideScreenshot(point)) return;
       canvas.setPointerCapture(event.pointerId);
+      if (this.tool === 'select') {
+        this.beginSelection(point, event.shiftKey);
+        return;
+      }
       if (this.tool === 'erase') {
         const hit = this.findMarkNear(point);
-        if (hit) void this.removeMark(hit.id);
+        if (hit) void this.removeMarks([hit.id]);
         return;
       } else if (this.tool === 'pen') {
         this.drawing = { points: [point] };
+      } else if (this.tool === 'text' && event.detail === 2) {
+        const hit = this.findMarkNear(point);
+        if (hit?.type === 'text') this.openTextEditor(hit.bounds, hit);
       } else if (this.tool === 'rectangle' || this.tool === 'ellipse' || this.tool === 'mask' || this.tool === 'arrow' || this.tool === 'line' || this.tool === 'text') {
-        this.dragStart = point;
-      } else if (this.tool === 'patch') {
-        // First drag on this tool selects the crop source; a second drag
-        // (handled below) places it. Starting a fresh drag while a source
-        // is already pending restarts the gesture from the new point.
         this.dragStart = point;
       }
     });
@@ -390,24 +500,20 @@ export class SessionAnnotatorApp {
         return;
       }
 
-      const point = this.clampToScreenshot(this.toScreenshotSpace(canvasPoint.x, canvasPoint.y));
-      if (this.tool === 'pen' && this.drawing) {
-        this.drawing.points.push(point);
+      let point = this.clampToScreenshot(this.toScreenshotSpace(canvasPoint.x, canvasPoint.y));
+      if (this.dragStart && event.shiftKey) point = this.constrainDrawPoint(this.dragStart, point, this.tool);
+      if (this.tool === 'select' && this.selectMode) {
+        this.updateSelectionPreview(point, event.shiftKey);
+      } else if (this.tool === 'select') {
+        this.updateSelectCursor(point);
+      } else if (this.tool === 'pen' && this.drawing) {
+        const coalesced = event.getCoalescedEvents?.() ?? [event];
+        for (const sample of coalesced) this.drawing.points.push(this.clampToScreenshot(this.toScreenshotSpace(this.canvasPoint(sample).x, this.canvasPoint(sample).y)));
         this.render();
         this.renderLivePreviewFreehand();
       } else if (this.dragStart && (this.tool === 'rectangle' || this.tool === 'ellipse' || this.tool === 'mask' || this.tool === 'arrow' || this.tool === 'line' || this.tool === 'text')) {
         this.render();
         this.renderLivePreviewDrag(this.dragStart, point);
-      } else if (this.dragStart && this.tool === 'patch' && !this.patchSourceRect) {
-        // Dragging out the source-selection rectangle (step 1).
-        this.render();
-        this.renderLivePreviewDrag(this.dragStart, point);
-      } else if (this.dragStart && this.tool === 'patch' && this.patchSourceRect) {
-        // Dragging out the destination (step 2): show the actual cropped
-        // pixels following the cursor, not just an outline, so placement is
-        // a real "cut and move" preview rather than an abstract box.
-        this.render();
-        this.renderLivePreviewPatchPlacement(this.dragStart, point);
       }
     });
 
@@ -416,18 +522,28 @@ export class SessionAnnotatorApp {
       if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
       if (this.isPanning) {
         this.isPanning = false;
+        canvas.style.cursor = this.tool === 'select' ? 'default' : '';
         return;
       }
 
       const canvasPoint = this.canvasPoint(event);
-      const point = this.clampToScreenshot(this.toScreenshotSpace(canvasPoint.x, canvasPoint.y));
+      let point = this.clampToScreenshot(this.toScreenshotSpace(canvasPoint.x, canvasPoint.y));
+      if (this.dragStart && event.shiftKey) point = this.constrainDrawPoint(this.dragStart, point, this.tool);
+
+      if (this.tool === 'select' && this.selectMode) {
+        this.finishSelection(point, event.shiftKey);
+        return;
+      }
 
       if (this.tool === 'pen' && this.drawing) {
         const points = this.drawing.points;
+        const lastPoint = points[points.length - 1];
+        if (!lastPoint || lastPoint.x !== point.x || lastPoint.y !== point.y) points.push(point);
         this.drawing = null;
-        if (points.length >= 2) {
-          const bounds = boundsOfPoints(points);
-          void this.commitAddMark({ type: 'freehand', frameId: this.state!.frameId, points, bounds, normalizedBounds: this.normalizeBounds(bounds) } as Omit<Mark, 'id' | 'groupId'>);
+        if (points.length >= 1) {
+          const smoothed = smoothPoints(points);
+          const bounds = boundsOfPoints(smoothed);
+          void this.commitAddMark({ type: 'freehand', frameId: this.state!.frameId, points: smoothed, bounds, normalizedBounds: this.normalizeBounds(bounds) } as Omit<Mark, 'id' | 'groupId'>);
         }
         return;
       }
@@ -442,24 +558,10 @@ export class SessionAnnotatorApp {
           height: Math.abs(point.y - start.y),
         };
 
-        if (this.tool === 'patch' && !this.patchSourceRect) {
-          // Step 1 finished: remember the source rect and wait for the
-          // destination drag. Zero-size drags cancel the gesture.
-          if (bounds.width >= 2 || bounds.height >= 2) this.patchSourceRect = bounds;
-          this.render();
-          return;
-        }
-        if (this.tool === 'patch' && this.patchSourceRect) {
-          const sourceRect = this.patchSourceRect;
-          this.patchSourceRect = null;
-          if (bounds.width < 2 && bounds.height < 2) {
-            this.render();
-            return;
-          }
-          void this.commitAddMark({ type: 'patch', frameId: this.state!.frameId, sourceRect, bounds, normalizedBounds: this.normalizeBounds(bounds) } as Omit<Mark, 'id' | 'groupId'>);
-          return;
-        }
-        if (bounds.width < 2 && bounds.height < 2) {
+        if (this.tool === 'text' && bounds.width < 2 && bounds.height < 2) {
+          bounds.width = Math.min(180, this.state!.viewport.width - bounds.x);
+          bounds.height = Math.min(48, this.state!.viewport.height - bounds.y);
+        } else if (bounds.width < 2 && bounds.height < 2) {
           this.render();
           return;
         }
@@ -470,33 +572,295 @@ export class SessionAnnotatorApp {
         } else if (this.tool === 'text') {
           this.openTextEditor(bounds);
         } else if (this.tool === 'rectangle' || this.tool === 'ellipse' || this.tool === 'mask') {
-          void this.commitAddMark({ type: this.tool, frameId: this.state!.frameId, bounds, normalizedBounds: this.normalizeBounds(bounds) } as Omit<Mark, 'id' | 'groupId'>);
+          void this.commitAddMark({ type: this.tool, frameId: this.state!.frameId, bounds, normalizedBounds: this.normalizeBounds(bounds), ...(this.tool === 'mask' ? { opacity: this.maskOpacity } : {}) } as Omit<Mark, 'id' | 'groupId'>);
         }
       }
     });
 
     canvas.addEventListener('pointercancel', (event) => {
       if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
-      this.isPanning = false;
-      this.drawing = null;
-      this.dragStart = null;
+      this.cancelInteraction();
       this.render();
+    });
+
+    canvas.addEventListener('dblclick', (event) => {
+      if (!this.isInteractionReady() || this.tool !== 'select') return;
+      const canvasPoint = this.canvasPoint(event);
+      const point = this.toScreenshotSpace(canvasPoint.x, canvasPoint.y);
+      const hit = this.findMarkNear(point);
+      if (hit?.type !== 'text') return;
+      this.selectedMarkIds = new Set([hit.id]);
+      this.selectionBounds = { ...hit.bounds };
+      this.openTextEditor(hit.bounds, hit);
     });
   }
 
-  /** Whether the patch tool is currently waiting for its destination drag (source already picked). */
-  isAwaitingPatchDestination(): boolean {
-    return this.patchSourceRect !== null;
-  }
-
-  /** Cancels an in-progress two-step patch gesture (e.g. tool switched away mid-gesture). */
-  cancelPendingPatch(): void {
-    this.patchSourceRect = null;
-    this.dragStart = null;
+  private beginSelection(point: { x: number; y: number }, additive: boolean): void {
+    const handle = this.selectionBounds && this.hitHandle(point, this.selectionBounds);
+    this.selectOrigin = point;
+    this.selectedAtStart = [...this.selectedMarkIds];
+    this.selectionAdditive = additive;
+    if (handle && this.selectionBounds) {
+      this.selectMode = 'resize';
+      this.selectInitialBounds = this.selectionBounds;
+      this.resizeCorner = handle;
+      return;
+    }
+    const anyHit = this.findMarkNear(point);
+    if (anyHit && anyHit.groupId !== this.state!.activeGroupId) {
+      this.selectedMarkIds.clear();
+      this.selectionBounds = null;
+      this.resetSelectionInteraction();
+      void this.setActiveGroup(anyHit.groupId).then(() => {
+        const refreshed = this.state?.marks.find((mark) => mark.id === anyHit.id);
+        if (!refreshed) return;
+        this.selectedMarkIds = new Set([refreshed.id]);
+        this.selectionBounds = { ...refreshed.bounds };
+        this.updateSelectionStatus();
+        this.render();
+        this.onStateChange?.();
+      });
+      return;
+    }
+    const hit = anyHit;
+    if (hit) {
+      this.selectionPressedMarkId = hit.id;
+      if (additive) {
+        if (!this.selectedMarkIds.has(hit.id)) this.selectedMarkIds.add(hit.id);
+      } else if (!this.selectedMarkIds.has(hit.id)) {
+        this.selectedMarkIds = new Set([hit.id]);
+      }
+      this.selectionBounds = this.boundsForSelection();
+      this.selectMode = this.selectedMarkIds.has(hit.id) ? 'move' : null;
+      this.selectInitialBounds = this.selectionBounds;
+    } else if (this.selectionBounds && this.contains(this.selectionBounds, point)) {
+      this.selectMode = 'patch';
+      this.selectInitialBounds = this.selectionBounds;
+    } else {
+      if (!additive) this.selectedMarkIds.clear();
+      this.selectionBounds = { x: point.x, y: point.y, width: 0, height: 0 };
+      this.selectMode = 'marquee';
+      this.selectInitialBounds = this.selectionBounds;
+    }
     this.render();
   }
 
-  private openTextEditor(dragBounds: { x: number; y: number; width: number; height: number }): void {
+  private updateSelectionPreview(point: { x: number; y: number }, constrain: boolean): void {
+    if (!this.selectOrigin || !this.selectionBounds) return;
+    if (this.selectMode === 'marquee') {
+      this.selectionBounds = this.rectFromPoints(this.selectOrigin, point, constrain);
+    } else if (this.selectMode === 'move' || this.selectMode === 'patch') {
+      let dx = point.x - this.selectOrigin.x;
+      let dy = point.y - this.selectOrigin.y;
+      if (constrain) { if (Math.abs(dx) >= Math.abs(dy)) dy = 0; else dx = 0; }
+      const initial = this.selectInitialBounds!;
+      this.selectionBounds = this.clampRectToScreenshot({ ...initial, x: initial.x + dx, y: initial.y + dy });
+    } else if (this.selectMode === 'resize') {
+      const initial = this.selectInitialBounds!;
+      const opposite = {
+        x: this.resizeCorner === 'nw' || this.resizeCorner === 'sw' ? initial.x + initial.width : initial.x,
+        y: this.resizeCorner === 'nw' || this.resizeCorner === 'ne' ? initial.y + initial.height : initial.y,
+      };
+      if (constrain && initial.width && initial.height) {
+        const dx = point.x - opposite.x; const dy = point.y - opposite.y; const ratio = initial.width / initial.height;
+        const width = Math.max(Math.abs(dx), Math.abs(dy) * ratio); const height = width / ratio;
+        this.selectionBounds = this.clampRectToScreenshot({ x: Math.min(opposite.x, opposite.x + Math.sign(dx || 1) * width), y: Math.min(opposite.y, opposite.y + Math.sign(dy || 1) * height), width, height });
+      } else this.selectionBounds = this.clampRectToScreenshot(this.rectFromPoints(opposite, point, false));
+    }
+    this.render();
+  }
+
+  private finishSelection(point: { x: number; y: number }, constrain: boolean): void {
+    const mode = this.selectMode;
+    const origin = this.selectOrigin;
+    this.selectMode = null;
+    this.selectOrigin = null;
+    if (!mode || !origin) return;
+    if (mode === 'marquee') {
+      const rect = this.rectFromPoints(origin, point, constrain);
+      const matches = this.state!.marks.filter((mark) => mark.groupId === this.state!.activeGroupId && this.intersects(mark.bounds, rect)).map((mark) => mark.id);
+      if (matches.length) {
+        this.selectedMarkIds = new Set(this.selectionAdditive ? [...this.selectedAtStart, ...matches] : matches);
+        this.selectionBounds = this.boundsForSelection();
+      } else if (!this.selectionAdditive) {
+        this.selectedMarkIds.clear();
+        this.selectionBounds = rect.width >= 2 && rect.height >= 2 ? rect : null;
+      }
+      this.selectInitialBounds = null;
+      this.updateSelectionStatus();
+      this.resetSelectionInteraction();
+      this.render();
+      return;
+    }
+    const initial = this.selectInitialBounds!;
+    if (mode === 'patch') {
+      const destination = { ...initial, x: this.selectionBounds!.x, y: this.selectionBounds!.y };
+      this.selectedMarkIds.clear();
+      this.selectionBounds = null;
+      this.selectInitialBounds = null;
+      this.resetSelectionInteraction();
+      void this.commitAddMark(
+        { type: 'patch', frameId: this.state!.frameId, sourceRect: initial, bounds: destination, normalizedBounds: this.normalizeBounds(destination) } as Omit<Mark, 'id' | 'groupId'>,
+        true,
+      );
+      return;
+    }
+    if (mode === 'move' || mode === 'resize') {
+      const next = this.selectionBounds!;
+      if (Math.abs(next.x - initial.x) < 0.01 && Math.abs(next.y - initial.y) < 0.01 && Math.abs(next.width - initial.width) < 0.01 && Math.abs(next.height - initial.height) < 0.01) {
+        if (
+          mode === 'move' &&
+          this.selectionAdditive &&
+          this.selectionPressedMarkId &&
+          this.selectedAtStart.includes(this.selectionPressedMarkId)
+        ) {
+          this.selectedMarkIds.delete(this.selectionPressedMarkId);
+          this.selectionBounds = this.boundsForSelection();
+          this.updateSelectionStatus();
+        } else if (
+          mode === 'move' &&
+          !this.selectionAdditive &&
+          this.selectionPressedMarkId &&
+          this.selectedAtStart.length > 1 &&
+          this.selectedAtStart.includes(this.selectionPressedMarkId)
+        ) {
+          this.selectedMarkIds = new Set([this.selectionPressedMarkId]);
+          this.selectionBounds = this.boundsForSelection();
+          this.updateSelectionStatus();
+        }
+        this.selectInitialBounds = null;
+        this.resetSelectionInteraction();
+        this.render();
+        return;
+      }
+      const sx = initial.width ? next.width / initial.width : 1;
+      const sy = initial.height ? next.height / initial.height : 1;
+      const dx = next.x - initial.x;
+      const dy = next.y - initial.y;
+      const marks = this.state!.marks.filter((mark) => this.selectedMarkIds.has(mark.id)).map((mark) =>
+        this.transformMark(mark, initial, sx, sy, dx, dy),
+      );
+      this.selectionBounds = next;
+      if (marks.length) void this.updateMarks(marks);
+    }
+    this.selectInitialBounds = null;
+    this.updateSelectionStatus();
+    this.resetSelectionInteraction();
+    this.render();
+  }
+
+  private updateSelectionStatus(): void {
+    const group = this.state?.groups.find((candidate) => candidate.id === this.state?.activeGroupId);
+    if (this.selectedMarkIds.size > 0) {
+      this.setStatus(this.message(
+        `${this.selectedMarkIds.size} selected · Group #${group?.number ?? ''}`,
+        `${this.selectedMarkIds.size}개 선택 · 그룹 #${group?.number ?? ''}`,
+      ));
+    } else if (this.selectionBounds) {
+      this.setStatus(this.message(
+        `Region ${Math.round(this.selectionBounds.width)} × ${Math.round(this.selectionBounds.height)}`,
+        `영역 ${Math.round(this.selectionBounds.width)} × ${Math.round(this.selectionBounds.height)}`,
+      ));
+    } else {
+      this.setStatus(this.message(`Select / Move · Group #${group?.number ?? ''}`, `선택 / 이동 · 그룹 #${group?.number ?? ''}`));
+    }
+  }
+
+  private transformMark(mark: Mark, box: { x: number; y: number; width: number; height: number }, sx: number, sy: number, dx: number, dy: number): Mark {
+    const point = (p: { x: number; y: number }) => ({ x: box.x + (p.x - box.x) * sx + dx, y: box.y + (p.y - box.y) * sy + dy });
+    const bounds = { x: box.x + (mark.bounds.x - box.x) * sx + dx, y: box.y + (mark.bounds.y - box.y) * sy + dy, width: mark.bounds.width * sx, height: mark.bounds.height * sy };
+    const result: Mark = { ...mark, bounds, normalizedBounds: this.normalizeBounds(bounds) } as Mark;
+    if (result.type === 'line' || result.type === 'arrow') Object.assign(result, { from: point(result.from), to: point(result.to) });
+    if (result.type === 'freehand') result.points = result.points.map(point);
+    if (result.type === 'text') result.anchor = point(result.anchor);
+    return result;
+  }
+
+  private boundsForSelectionOrEphemeral() { return this.selectedMarkIds.size ? this.boundsForSelection()! : this.selectionBounds!; }
+  private boundsForSelection() {
+    const marks = this.state!.marks.filter((mark) => this.selectedMarkIds.has(mark.id) && mark.groupId === this.state!.activeGroupId);
+    if (!marks.length) return null;
+    const left = Math.min(...marks.map((mark) => mark.bounds.x)); const top = Math.min(...marks.map((mark) => mark.bounds.y));
+    const right = Math.max(...marks.map((mark) => mark.bounds.x + mark.bounds.width)); const bottom = Math.max(...marks.map((mark) => mark.bounds.y + mark.bounds.height));
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  }
+  private rectFromPoints(a: { x: number; y: number }, b: { x: number; y: number }, square: boolean) {
+    let dx = b.x - a.x; let dy = b.y - a.y;
+    if (square) { const size = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * size; dy = Math.sign(dy || 1) * size; }
+    return { x: Math.min(a.x, a.x + dx), y: Math.min(a.y, a.y + dy), width: Math.abs(dx), height: Math.abs(dy) };
+  }
+  private clampRectToScreenshot(rect: { x: number; y: number; width: number; height: number }) {
+    if (!this.state) return rect;
+    const width = Math.min(Math.max(0, rect.width), this.state.viewport.width);
+    const height = Math.min(Math.max(0, rect.height), this.state.viewport.height);
+    return {
+      x: Math.max(0, Math.min(this.state.viewport.width - width, rect.x)),
+      y: Math.max(0, Math.min(this.state.viewport.height - height, rect.y)),
+      width,
+      height,
+    };
+  }
+  private intersects(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) { return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y; }
+  private contains(b: { x: number; y: number; width: number; height: number }, p: { x: number; y: number }) { return p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height; }
+  private hitHandle(p: { x: number; y: number }, b: { x: number; y: number; width: number; height: number }) {
+    const corners = { nw: [b.x, b.y], ne: [b.x + b.width, b.y], sw: [b.x, b.y + b.height], se: [b.x + b.width, b.y + b.height] } as const;
+    return (Object.entries(corners).find(([, [x, y]]) => Math.hypot(p.x - x, p.y - y) <= 8 / this.scale)?.[0] ?? null) as 'nw' | 'ne' | 'sw' | 'se' | null;
+  }
+
+  private updateSelectCursor(point: { x: number; y: number }): void {
+    const handle = this.selectionBounds && this.hitHandle(point, this.selectionBounds);
+    if (handle === 'nw' || handle === 'se') {
+      this.opts.canvas.style.cursor = 'nwse-resize';
+    } else if (handle === 'ne' || handle === 'sw') {
+      this.opts.canvas.style.cursor = 'nesw-resize';
+    } else if (
+      (this.selectionBounds && this.contains(this.selectionBounds, point)) ||
+      this.findMarkNear(point)
+    ) {
+      this.opts.canvas.style.cursor = 'move';
+    } else {
+      this.opts.canvas.style.cursor = 'crosshair';
+    }
+  }
+
+  private constrainDrawPoint(start: { x: number; y: number }, point: { x: number; y: number }, tool: ToolName) {
+    let dx = point.x - start.x; let dy = point.y - start.y;
+    if (tool === 'line' || tool === 'arrow') {
+      const angle = Math.atan2(dy, dx); const snap = Math.round(angle / (Math.PI / 4)) * Math.PI / 4; const length = Math.hypot(dx, dy);
+      return { x: start.x + Math.cos(snap) * length, y: start.y + Math.sin(snap) * length };
+    }
+    if (tool === 'rectangle' || tool === 'ellipse' || tool === 'mask') {
+      const size = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * size; dy = Math.sign(dy || 1) * size;
+      return { x: start.x + dx, y: start.y + dy };
+    }
+    return point;
+  }
+
+  private resetSelectionInteraction(): void {
+    this.selectMode = null;
+    this.selectOrigin = null;
+    this.selectInitialBounds = null;
+    this.resizeCorner = null;
+    this.selectionAdditive = false;
+    this.selectionPressedMarkId = null;
+  }
+
+  private cancelInteraction(): void {
+    this.isPanning = false;
+    this.opts.canvas.style.cursor = this.tool === 'select' ? 'default' : '';
+    this.drawing = null;
+    this.dragStart = null;
+    if (this.selectedMarkIds.size > 0) {
+      this.selectionBounds = this.boundsForSelection();
+    } else if (this.selectInitialBounds && (this.selectMode === 'resize' || this.selectMode === 'patch')) {
+      this.selectionBounds = { ...this.selectInitialBounds };
+    } else if (this.selectMode === 'marquee') {
+      this.selectionBounds = null;
+    }
+    this.resetSelectionInteraction();
+  }
+
+  private openTextEditor(dragBounds: { x: number; y: number; width: number; height: number }, existing?: Extract<Mark, { type: 'text' }>): void {
     if (!this.state) return;
     const bounds = {
       x: dragBounds.x,
@@ -523,6 +887,7 @@ export class SessionAnnotatorApp {
     editor.style.lineHeight = '1.25';
     parent.appendChild(editor);
     this.textEditor = editor;
+    editor.value = existing?.text ?? '';
 
     let settled = false;
     const finish = (commit: boolean) => {
@@ -531,7 +896,9 @@ export class SessionAnnotatorApp {
       const text = editor.value.trim();
       editor.remove();
       this.textEditor = null;
-      if (commit && text) {
+      if (commit && text && existing) {
+        void this.updateMarks([{ ...existing, text, bounds, anchor: { x: bounds.x, y: bounds.y }, normalizedBounds: this.normalizeBounds(bounds) }]);
+      } else if (commit && text) {
         void this.commitAddMark({
           type: 'text',
           frameId: this.state!.frameId,
@@ -602,16 +969,44 @@ export class SessionAnnotatorApp {
     return null;
   }
 
-  private commitAddMark(mark: Omit<Mark, 'id' | 'groupId'>): Promise<void> {
+  private commitAddMark(mark: Omit<Mark, 'id' | 'groupId'>, selectAfter = false): Promise<void> {
     return this.enqueueMutation(async () => {
-      await this.api.addMark(mark);
+      const created = await this.api.addMark(mark);
+      await this.refresh();
+      if (selectAfter) {
+        this.selectedMarkIds = new Set([created.mark.id]);
+        this.selectionBounds = { ...created.mark.bounds };
+        this.updateSelectionStatus();
+        this.render();
+        this.onStateChange?.();
+      }
+    });
+  }
+
+  removeMarks(markIds: string[]): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.api.removeMarks(markIds);
       await this.refresh();
     });
   }
 
-  removeMark(markId: string): Promise<void> {
+  private updateMarks(marks: Mark[]): Promise<void> {
+    this.pendingMarkOverrides = new Map(marks.map((mark) => [mark.id, structuredClone(mark)]));
+    this.render();
     return this.enqueueMutation(async () => {
-      await this.api.removeMark(markId);
+      try {
+        await this.api.updateMarks(marks);
+        await this.refresh();
+      } finally {
+        this.pendingMarkOverrides.clear();
+        this.render();
+      }
+    });
+  }
+
+  private updateMaskStyle(markIds: string[], opacity: number): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.api.updateMaskStyle(markIds, opacity);
       await this.refresh();
     });
   }
@@ -637,7 +1032,18 @@ export class SessionAnnotatorApp {
     });
   }
 
+  deleteGroup(groupId: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.api.deleteGroup(groupId);
+      await this.refresh();
+    });
+  }
+
   setActiveGroup(groupId: string): Promise<void> {
+    if (!this.isInteractionReady()) return this.rejectUnavailable();
+    this.selectedMarkIds.clear();
+    this.selectionBounds = null;
+    this.cancelInteraction();
     return this.enqueueMutation(async () => {
       await this.api.setActiveGroup(groupId);
       await this.refresh();
@@ -683,13 +1089,21 @@ export class SessionAnnotatorApp {
   }
 
   private isInteractionReady(): boolean {
-    return this.loaded && this.state !== null && !this.submissionPending;
+    return this.loaded && this.state !== null && !this.submissionPending && this.pendingMutationCount === 0;
   }
 
   private enqueueMutation<T>(mutation: () => Promise<T>): Promise<T> {
     if (!this.isInteractionReady()) return this.rejectUnavailable();
 
-    const operation = this.mutationTail.then(mutation);
+    this.pendingMutationCount++;
+    this.opts.canvas.style.cursor = 'wait';
+    this.setStatus(this.message('Saving changes...', '변경사항 저장 중...'));
+    this.onStateChange?.();
+    const operation = this.mutationTail.then(mutation).finally(() => {
+      this.pendingMutationCount--;
+      this.opts.canvas.style.cursor = this.tool === 'select' ? 'default' : '';
+      this.onStateChange?.();
+    });
     this.mutationTail = operation.then(
       () => undefined,
       (error) => {
@@ -708,7 +1122,9 @@ export class SessionAnnotatorApp {
   private rejectUnavailable<T>(): Promise<T> {
     return this.rejectRequest(new Error(this.submissionPending
       ? this.message('Changes are disabled while submitting.', '제출이 진행 중인 동안에는 변경할 수 없습니다.')
-      : this.message('Wait for the session to load, then try again.', '세션을 불러온 뒤에 다시 시도하세요.')));
+      : this.pendingMutationCount > 0
+        ? this.message('Wait for the current change to finish saving.', '현재 변경사항 저장이 끝날 때까지 기다려 주세요.')
+        : this.message('Wait for the session to load, then try again.', '세션을 불러온 뒤에 다시 시도하세요.')));
   }
 
   private rejectRequest<T>(error: Error): Promise<T> {
@@ -723,30 +1139,45 @@ export class SessionAnnotatorApp {
   }
 
   private setStatus(message: string, isError = false): void {
+    const interactionStatus = document.getElementById('interaction-status');
+    if (interactionStatus) interactionStatus.textContent = message;
     const status = document.getElementById('submit-status');
-    if (!status) return;
+    if (!status || !isError) return;
     status.textContent = message;
-    status.className = isError ? 'error' : '';
+    status.className = 'error';
   }
 
   private async refresh(): Promise<void> {
     this.state = await this.api.getState();
+    this.selectedMarkIds = new Set(
+      [...this.selectedMarkIds].filter((id) => this.state!.marks.some((mark) => mark.id === id)),
+    );
+    this.selectionBounds = this.selectedMarkIds.size > 0 ? this.boundsForSelection() : this.selectionBounds;
     this.render();
     this.onStateChange?.();
   }
 
   private renderLivePreviewFreehand(): void {
     if (!this.drawing) return;
+    const points = smoothPoints(this.drawing.points);
+    if (points.length === 0) return;
     const ctx = this.ctx;
     ctx.save();
     ctx.translate(this.panX, this.panY);
     ctx.scale(this.scale, this.scale);
     ctx.strokeStyle = this.activeColor();
     ctx.lineWidth = 2 / this.scale;
-    ctx.beginPath();
-    ctx.moveTo(this.drawing.points[0].x, this.drawing.points[0].y);
-    for (const p of this.drawing.points.slice(1)) ctx.lineTo(p.x, p.y);
-    ctx.stroke();
+    if (points.length === 1) {
+      ctx.fillStyle = this.activeColor();
+      ctx.beginPath();
+      ctx.arc(points[0].x, points[0].y, 1.5 / this.scale, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (const point of points.slice(1)) ctx.lineTo(point.x, point.y);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -826,55 +1257,33 @@ export class SessionAnnotatorApp {
     ctx.restore();
   }
 
-  /**
-   * Draws the crop-source screenshot pixels following the destination drag
-   * so the patch tool previews an actual "cut and move" \u2014 not just an
-   * outline \u2014 before the mark is committed.
-   */
-  private renderLivePreviewPatchPlacement(destStart: { x: number; y: number }, destEnd: { x: number; y: number }): void {
-    if (!this.patchSourceRect || !this.state) return;
-    const ctx = this.ctx;
-    const destBounds = {
-      x: Math.min(destStart.x, destEnd.x),
-      y: Math.min(destStart.y, destEnd.y),
-      width: Math.abs(destEnd.x - destStart.x),
-      height: Math.abs(destEnd.y - destStart.y),
-    };
-    ctx.save();
-    ctx.translate(this.panX, this.panY);
-    ctx.scale(this.scale, this.scale);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(
-      this.patchSourceRect.x,
-      this.patchSourceRect.y,
-      this.patchSourceRect.width,
-      this.patchSourceRect.height,
-    );
-    ctx.globalAlpha = 0.85;
-    const sourceRect = this.screenshotSourceRect(this.patchSourceRect);
-    ctx.drawImage(
-      this.opts.screenshotImage,
-      sourceRect.x,
-      sourceRect.y,
-      sourceRect.width,
-      sourceRect.height,
-      destBounds.x,
-      destBounds.y,
-      destBounds.width || 1,
-      destBounds.height || 1,
-    );
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = this.activeColor();
-    ctx.lineWidth = 2 / this.scale;
-    ctx.strokeRect(destBounds.x, destBounds.y, destBounds.width, destBounds.height);
-    this.drawPatchIndicator(this.patchSourceRect, destBounds, this.activeColor());
-    ctx.restore();
-  }
-
   private activeColor(): string {
     if (!this.state) return '#000000';
     const active = this.state.groups.find((g) => g.id === this.state!.activeGroupId);
     return active?.color ?? '#000000';
+  }
+
+  private selectionPreviewMarks(): Map<string, Mark> {
+    if (
+      !this.state ||
+      !this.selectInitialBounds ||
+      !this.selectionBounds ||
+      (this.selectMode !== 'move' && this.selectMode !== 'resize') ||
+      this.selectedMarkIds.size === 0
+    ) {
+      return new Map();
+    }
+    const initial = this.selectInitialBounds;
+    const next = this.selectionBounds;
+    const sx = initial.width ? next.width / initial.width : 1;
+    const sy = initial.height ? next.height / initial.height : 1;
+    const dx = next.x - initial.x;
+    const dy = next.y - initial.y;
+    return new Map(
+      this.state.marks
+        .filter((mark) => this.selectedMarkIds.has(mark.id))
+        .map((mark) => [mark.id, this.transformMark(mark, initial, sx, sy, dx, dy)] as const),
+    );
   }
 
   render(): void {
@@ -891,8 +1300,13 @@ export class SessionAnnotatorApp {
 
     const colorByGroupId = new Map(state.groups.map((g) => [g.id, g.color] as const));
 
-    for (const mark of state.marks) {
+    const previewMarks = this.selectionPreviewMarks();
+    for (const persistedMark of state.marks) {
+      const mark = previewMarks.get(persistedMark.id) ?? this.pendingMarkOverrides.get(persistedMark.id) ?? persistedMark;
       const color = colorByGroupId.get(mark.groupId) ?? '#000000';
+      ctx.globalAlpha = this.hoveredGroupId
+        ? (mark.groupId === this.hoveredGroupId ? 1 : 0.2)
+        : (mark.groupId === state.activeGroupId ? 1 : 0.3);
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       ctx.lineWidth = 2 / this.scale;
@@ -923,10 +1337,16 @@ export class SessionAnnotatorApp {
           ctx.stroke();
           break;
         case 'freehand':
-          ctx.beginPath();
-          ctx.moveTo(mark.points[0].x, mark.points[0].y);
-          for (const point of mark.points.slice(1)) ctx.lineTo(point.x, point.y);
-          ctx.stroke();
+          if (mark.points.length === 1) {
+            ctx.beginPath();
+            ctx.arc(mark.points[0].x, mark.points[0].y, 1.5 / this.scale, 0, Math.PI * 2);
+            ctx.fill();
+          } else {
+            ctx.beginPath();
+            ctx.moveTo(mark.points[0].x, mark.points[0].y);
+            for (const point of mark.points.slice(1)) ctx.lineTo(point.x, point.y);
+            ctx.stroke();
+          }
           break;
         case 'text':
           ctx.font = '14px sans-serif';
@@ -938,7 +1358,13 @@ export class SessionAnnotatorApp {
           ctx.restore();
           break;
         case 'mask':
+          ctx.globalAlpha *= this.tool === 'mask' && this.selectedMarkIds.has(mark.id)
+            ? this.maskOpacity
+            : mark.opacity;
           ctx.fillRect(mark.bounds.x, mark.bounds.y, mark.bounds.width, mark.bounds.height);
+          ctx.globalAlpha = this.hoveredGroupId
+            ? (mark.groupId === this.hoveredGroupId ? 1 : 0.2)
+            : (mark.groupId === state.activeGroupId ? 1 : 0.3);
           break;
         case 'patch':
           // Renders the actual cropped screenshot pixels at the destination
@@ -971,15 +1397,43 @@ export class SessionAnnotatorApp {
           break;
       }
     }
-
-    if (this.patchSourceRect) {
-      // Highlights the already-picked crop source while the destination drag
-      // (step 2) is still pending, so the two-step gesture stays legible.
+    if (this.selectMode === 'patch' && this.selectInitialBounds && this.selectionBounds) {
+      const source = this.selectInitialBounds;
+      const destination = this.selectionBounds;
       ctx.save();
-      ctx.strokeStyle = this.activeColor();
-      ctx.setLineDash([4 / this.scale, 3 / this.scale]);
-      ctx.lineWidth = 2 / this.scale;
-      ctx.strokeRect(this.patchSourceRect.x, this.patchSourceRect.y, this.patchSourceRect.width, this.patchSourceRect.height);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(source.x, source.y, source.width, source.height);
+      const imageSource = this.screenshotSourceRect(source);
+      ctx.drawImage(
+        opts.screenshotImage,
+        imageSource.x,
+        imageSource.y,
+        imageSource.width,
+        imageSource.height,
+        destination.x,
+        destination.y,
+        destination.width,
+        destination.height,
+      );
+      this.drawPatchIndicator(source, destination, this.activeColor());
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+
+    if (this.selectionBounds) {
+      ctx.save();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 3 / this.scale;
+      ctx.strokeRect(this.selectionBounds.x, this.selectionBounds.y, this.selectionBounds.width, this.selectionBounds.height);
+      ctx.strokeStyle = '#0055aa';
+      ctx.lineWidth = 1 / this.scale;
+      ctx.strokeRect(this.selectionBounds.x, this.selectionBounds.y, this.selectionBounds.width, this.selectionBounds.height);
+      for (const [x, y] of [[this.selectionBounds.x, this.selectionBounds.y], [this.selectionBounds.x + this.selectionBounds.width, this.selectionBounds.y], [this.selectionBounds.x, this.selectionBounds.y + this.selectionBounds.height], [this.selectionBounds.x + this.selectionBounds.width, this.selectionBounds.y + this.selectionBounds.height]]) {
+        ctx.fillStyle = '#fff'; ctx.strokeStyle = '#0055aa';
+        ctx.fillRect(x - 4 / this.scale, y - 4 / this.scale, 8 / this.scale, 8 / this.scale);
+        ctx.strokeRect(x - 4 / this.scale, y - 4 / this.scale, 8 / this.scale, 8 / this.scale);
+      }
       ctx.restore();
     }
 
@@ -994,6 +1448,10 @@ export class SessionAnnotatorApp {
         const screenshotY = cluster.y - 8;
         const cx = screenshotX * this.scale + this.panX;
         const cy = screenshotY * this.scale + this.panY;
+        ctx.save();
+        ctx.globalAlpha = this.hoveredGroupId
+          ? (group.id === this.hoveredGroupId ? 1 : 0.3)
+          : (group.id === state.activeGroupId ? 1 : 0.4);
         ctx.beginPath();
         ctx.fillStyle = group.color;
         ctx.arc(cx, cy, 10, 0, Math.PI * 2);
@@ -1005,6 +1463,7 @@ export class SessionAnnotatorApp {
         ctx.fillText(String(group.number), cx, cy);
         ctx.textAlign = 'start';
         ctx.textBaseline = 'alphabetic';
+        ctx.restore();
       }
     }
   }
@@ -1086,6 +1545,27 @@ function boundsOfPoints(points: { x: number; y: number }[]) {
     width: Math.max(...xs) - Math.min(...xs),
     height: Math.max(...ys) - Math.min(...ys),
   };
+}
+
+/** Fixed three-point smoothing keeps both endpoints and retains dots/short strokes. */
+function smoothPoints(points: { x: number; y: number }[]) {
+  const deduped: { x: number; y: number }[] = [];
+  for (const point of points) {
+    const previous = deduped[deduped.length - 1];
+    if (!previous || Math.hypot(point.x - previous.x, point.y - previous.y) >= 0.5) deduped.push(point);
+  }
+  const finalPoint = points[points.length - 1];
+  if (finalPoint) {
+    const lastIndex = deduped.length - 1;
+    const previous = deduped[lastIndex];
+    if (!previous) deduped.push(finalPoint);
+    else if (previous !== finalPoint && Math.hypot(finalPoint.x - previous.x, finalPoint.y - previous.y) < 0.5) deduped[lastIndex] = finalPoint;
+    else if (previous !== finalPoint) deduped.push(finalPoint);
+  }
+  if (deduped.length < 3) return deduped;
+  return deduped.map((point, index) => index === 0 || index === deduped.length - 1
+    ? point
+    : { x: (deduped[index - 1].x + point.x + deduped[index + 1].x) / 3, y: (deduped[index - 1].y + point.y + deduped[index + 1].y) / 3 });
 }
 
 /**

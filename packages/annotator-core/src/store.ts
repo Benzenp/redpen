@@ -19,15 +19,37 @@ export interface AnnotatorSnapshot {
   activeGroupId: string;
 }
 
+export type MarkUpdate = Mark;
+
 export interface EmptyGroupWarning {
   groupId: string;
   number: number;
 }
 
+export type AnnotatorStoreErrorCode =
+  | 'invalid_annotation_mutation'
+  | 'mark_not_found'
+  | 'group_not_found'
+  | 'group_not_empty'
+  | 'last_group'
+  | 'group_reference_limit';
+
+export class AnnotatorStoreError extends Error {
+  constructor(
+    readonly code: AnnotatorStoreErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'AnnotatorStoreError';
+  }
+}
+
 export type NewMarkInput = Mark extends infer M
-  ? M extends { id: string; groupId: string }
-    ? Omit<M, 'id' | 'groupId'>
-    : never
+  ? M extends { type: 'mask' }
+    ? Omit<M, 'id' | 'groupId' | 'opacity'> & { opacity?: number }
+    : M extends { id: string; groupId: string }
+      ? Omit<M, 'id' | 'groupId'>
+      : never
   : never;
 
 const MAX_HISTORY = 200;
@@ -38,6 +60,7 @@ export class AnnotatorStore {
   private activeGroupId = '';
   private undoStack: AnnotatorSnapshot[] = [];
   private redoStack: AnnotatorSnapshot[] = [];
+  private nextGroupNumber = 2;
 
   constructor() {
     // "#1 기본 group 자동 생성" (docs/IMPLEMENTATION_PLAN.md Phase 2). Done inline
@@ -57,27 +80,14 @@ export class AnnotatorStore {
   }
 
   private snapshot(): AnnotatorSnapshot {
-    return {
-      groups: this.groups.map((g) => ({
-        ...g,
-        markIds: [...g.markIds],
-        targetIds: [...g.targetIds],
-        referenceIds: [...g.referenceIds],
-      })),
-      marks: [...this.marks],
-      activeGroupId: this.activeGroupId,
-    };
+    return structuredClone({ groups: this.groups, marks: this.marks, activeGroupId: this.activeGroupId });
   }
 
   private restore(snapshot: AnnotatorSnapshot): void {
-    this.groups = snapshot.groups.map((g) => ({
-      ...g,
-      markIds: [...g.markIds],
-      targetIds: [...g.targetIds],
-      referenceIds: [...g.referenceIds],
-    }));
-    this.marks = [...snapshot.marks];
-    this.activeGroupId = snapshot.activeGroupId;
+    const state = structuredClone(snapshot);
+    this.groups = state.groups;
+    this.marks = state.marks;
+    this.activeGroupId = state.activeGroupId;
   }
 
   private pushHistory(): void {
@@ -87,11 +97,11 @@ export class AnnotatorStore {
   }
 
   getGroups(): readonly InstructionGroup[] {
-    return this.groups;
+    return structuredClone(this.groups);
   }
 
   getMarks(): readonly Mark[] {
-    return this.marks;
+    return structuredClone(this.marks);
   }
 
   getActiveGroupId(): string {
@@ -99,13 +109,13 @@ export class AnnotatorStore {
   }
 
   getMarksForGroup(groupId: string): Mark[] {
-    return this.marks.filter((m) => m.groupId === groupId);
+    return structuredClone(this.marks.filter((m) => m.groupId === groupId));
   }
 
   /** "새 지시" — next number and next palette color, never reusing a number. */
   createGroup(): InstructionGroup {
     this.pushHistory();
-    const number = this.groups.length + 1;
+    const number = this.nextGroupNumber++;
     const group: InstructionGroup = {
       id: generateGroupId(),
       number,
@@ -117,12 +127,12 @@ export class AnnotatorStore {
     };
     this.groups.push(group);
     this.activeGroupId = group.id;
-    return group;
+    return structuredClone(group);
   }
 
   setActiveGroup(groupId: string): void {
     if (!this.groups.some((g) => g.id === groupId)) {
-      throw new Error(`unknown groupId: ${groupId}`);
+      throw new AnnotatorStoreError('group_not_found', `unknown groupId: ${groupId}`);
     }
     // Selecting a group is not itself undoable content, but keep it out of
     // history so undo/redo only ever rewinds drawing operations.
@@ -131,7 +141,7 @@ export class AnnotatorStore {
 
   setGroupNote(groupId: string, note: string | undefined): void {
     const group = this.groups.find((g) => g.id === groupId);
-    if (!group) throw new Error(`unknown groupId: ${groupId}`);
+    if (!group) throw new AnnotatorStoreError('group_not_found', `unknown groupId: ${groupId}`);
     this.pushHistory();
     group.note = note;
     group.state = 'ready';
@@ -139,10 +149,10 @@ export class AnnotatorStore {
 
   attachReference(groupId: string, referenceId: string): void {
     const group = this.groups.find((g) => g.id === groupId);
-    if (!group) throw new Error(`unknown groupId: ${groupId}`);
+    if (!group) throw new AnnotatorStoreError('group_not_found', `unknown groupId: ${groupId}`);
     if (group.referenceIds.includes(referenceId)) return;
     if (group.referenceIds.length >= 3) {
-      throw new Error(`group ${groupId} cannot have more than 3 references`);
+      throw new AnnotatorStoreError('group_reference_limit', `group ${groupId} cannot have more than 3 references`);
     }
     this.pushHistory();
     group.referenceIds.push(referenceId);
@@ -150,7 +160,7 @@ export class AnnotatorStore {
 
   detachReference(groupId: string, referenceId: string): void {
     const group = this.groups.find((g) => g.id === groupId);
-    if (!group) throw new Error(`unknown groupId: ${groupId}`);
+    if (!group) throw new AnnotatorStoreError('group_not_found', `unknown groupId: ${groupId}`);
     if (!group.referenceIds.includes(referenceId)) return;
     this.pushHistory();
     group.referenceIds = group.referenceIds.filter((id) => id !== referenceId);
@@ -158,22 +168,107 @@ export class AnnotatorStore {
 
   /** Adds a mark to the currently active group. */
   addMark(input: NewMarkInput): Mark {
-    if (!this.activeGroupId) throw new Error('no active group');
+    if (!this.activeGroupId) throw new AnnotatorStoreError('group_not_found', 'no active group');
     this.pushHistory();
-    const mark = { ...input, id: generateMarkId(), groupId: this.activeGroupId } as Mark;
+    const mark = {
+      ...input,
+      ...(input.type === 'mask' ? { opacity: input.opacity ?? 0.5 } : {}),
+      id: generateMarkId(),
+      groupId: this.activeGroupId,
+    } as Mark;
     this.marks.push(mark);
     const group = this.groups.find((g) => g.id === this.activeGroupId);
     if (group) group.markIds.push(mark.id);
-    return mark;
+    return structuredClone(mark);
   }
 
-  removeMark(markId: string): void {
+  updateMarks(updates: readonly MarkUpdate[]): void {
+    if (updates.length === 0) {
+      throw new AnnotatorStoreError('invalid_annotation_mutation', 'at least one mark update is required');
+    }
+    const existing = new Map(this.marks.map((mark) => [mark.id, mark]));
+    const updateIds = new Set<string>();
+    for (const update of updates) {
+      if (updateIds.has(update.id)) {
+        throw new AnnotatorStoreError('invalid_annotation_mutation', `duplicate markId: ${update.id}`);
+      }
+      updateIds.add(update.id);
+      const mark = existing.get(update.id);
+      if (!mark) throw new AnnotatorStoreError('mark_not_found', `unknown markId: ${update.id}`);
+      if (mark.type !== update.type || mark.frameId !== update.frameId || mark.groupId !== update.groupId) {
+        throw new AnnotatorStoreError('invalid_annotation_mutation', `mark identity cannot change: ${update.id}`);
+      }
+    }
+    if (updates.every((update) => JSON.stringify(existing.get(update.id)) === JSON.stringify(update))) return;
     this.pushHistory();
-    const mark = this.marks.find((m) => m.id === markId);
-    if (!mark) return;
-    this.marks = this.marks.filter((m) => m.id !== markId);
-    const group = this.groups.find((g) => g.id === mark.groupId);
-    if (group) group.markIds = group.markIds.filter((id) => id !== markId);
+    const replacements = new Map(updates.map((mark) => [mark.id, structuredClone(mark)]));
+    this.marks = this.marks.map((mark) => replacements.get(mark.id) ?? mark);
+  }
+
+  reassignMarks(markIds: readonly string[], groupId: string): void {
+    const destination = this.groups.find((group) => group.id === groupId);
+    if (!destination) throw new AnnotatorStoreError('group_not_found', `unknown groupId: ${groupId}`);
+    this.assertKnownUniqueMarkIds(markIds);
+    if (markIds.every((id) => this.marks.find((mark) => mark.id === id)?.groupId === groupId)) return;
+    this.pushHistory();
+    const ids = new Set(markIds);
+    this.marks = this.marks.map((mark) => ids.has(mark.id) ? { ...mark, groupId } : mark);
+    for (const group of this.groups) {
+      group.markIds = group.markIds.filter((id) => !ids.has(id));
+    }
+    destination.markIds.push(...markIds);
+  }
+
+  deleteMarks(markIds: readonly string[]): void {
+    this.assertKnownUniqueMarkIds(markIds);
+    this.pushHistory();
+    const ids = new Set(markIds);
+    this.marks = this.marks.filter((mark) => !ids.has(mark.id));
+    for (const group of this.groups) group.markIds = group.markIds.filter((id) => !ids.has(id));
+  }
+
+  updateMaskStyle(markIds: readonly string[], opacity: number): void {
+    if (!Number.isFinite(opacity) || opacity < 0.1 || opacity > 1) {
+      throw new AnnotatorStoreError('invalid_annotation_mutation', 'mask opacity must be between 0.1 and 1');
+    }
+    this.assertKnownUniqueMarkIds(markIds);
+    if (!markIds.every((id) => this.marks.find((mark) => mark.id === id)?.type === 'mask')) {
+      throw new AnnotatorStoreError('invalid_annotation_mutation', 'mask style can only be applied to masks');
+    }
+    if (markIds.every((id) => {
+      const mark = this.marks.find((candidate) => candidate.id === id);
+      return mark?.type === 'mask' && mark.opacity === opacity;
+    })) return;
+    this.pushHistory();
+    const ids = new Set(markIds);
+    this.marks = this.marks.map((mark) => mark.type === 'mask' && ids.has(mark.id) ? { ...mark, opacity } : mark);
+  }
+
+  deleteGroup(groupId: string): void {
+    if (this.groups.length === 1) throw new AnnotatorStoreError('last_group', 'cannot delete the last group');
+    const group = this.groups.find((candidate) => candidate.id === groupId);
+    if (!group) throw new AnnotatorStoreError('group_not_found', `unknown groupId: ${groupId}`);
+    if (group.markIds.length > 0 || group.targetIds.length > 0 || group.referenceIds.length > 0) {
+      throw new AnnotatorStoreError('group_not_empty', `cannot delete non-empty group: ${groupId}`);
+    }
+    this.pushHistory();
+    this.groups = this.groups.filter((candidate) => candidate.id !== groupId);
+    if (this.activeGroupId === groupId) this.activeGroupId = this.groups[0].id;
+  }
+
+  private assertKnownUniqueMarkIds(markIds: readonly string[]): void {
+    if (markIds.length === 0) {
+      throw new AnnotatorStoreError('invalid_annotation_mutation', 'at least one markId is required');
+    }
+    const existing = new Set(this.marks.map((mark) => mark.id));
+    const unique = new Set<string>();
+    for (const markId of markIds) {
+      if (unique.has(markId)) {
+        throw new AnnotatorStoreError('invalid_annotation_mutation', `duplicate markId: ${markId}`);
+      }
+      unique.add(markId);
+      if (!existing.has(markId)) throw new AnnotatorStoreError('mark_not_found', `unknown markId: ${markId}`);
+    }
   }
 
   undo(): boolean {
@@ -184,12 +279,20 @@ export class AnnotatorStore {
     return true;
   }
 
+  canUndo(): boolean {
+    return this.undoStack.length > 0;
+  }
+
   redo(): boolean {
     if (this.redoStack.length === 0) return false;
     this.undoStack.push(this.snapshot());
     const next = this.redoStack.pop()!;
     this.restore(next);
     return true;
+  }
+
+  canRedo(): boolean {
+    return this.redoStack.length > 0;
   }
 
   /** Groups with zero marks are not allowed to submit (docs/PRODUCT_INTENT.md §6.4). */

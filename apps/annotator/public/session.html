@@ -5,13 +5,13 @@
   <title>Redpen — Annotate the screen</title>
   <style>
     :root {
-      --ink: #18181b;
+      --ink: #000000;
       --muted: #71717a;
       --faint: #a1a1aa;
       --border: #e4e4e7;
-      --surface: #ffffff;
-      --canvas-bg: #f4f4f5;
-      --accent: #18181b;
+      --surface: #c0c0c0;
+      --canvas-bg: #808080;
+      --accent: #000080;
       --danger: #dc2626;
       --radius: 10px;
     }
@@ -34,11 +34,24 @@
       background: var(--canvas-bg);
       overflow: hidden;
     }
+    #paint-titlebar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 22px;
+      padding: 3px 7px;
+      background: #000080;
+      color: #fff;
+      font-weight: bold;
+      z-index: 6;
+    }
     #screenshot-source { display: none; }
     canvas { display: block; touch-action: none; }
-    canvas.tool-pen, canvas.tool-arrow, canvas.tool-line, canvas.tool-rectangle, canvas.tool-ellipse, canvas.tool-mask, canvas.tool-patch { cursor: crosshair; }
+    canvas.tool-pen, canvas.tool-arrow, canvas.tool-line, canvas.tool-rectangle, canvas.tool-ellipse, canvas.tool-mask { cursor: crosshair; }
     canvas.tool-text { cursor: text; }
     canvas.tool-erase { cursor: cell; }
+    canvas.tool-select { cursor: default; }
 
     #toolbar {
       position: absolute;
@@ -307,14 +320,170 @@
     #submit-overlay .headline { font-size: 18px; font-weight: 700; }
     #submit-overlay .taskid { font-size: 13px; color: #a1a1aa; font-family: monospace; }
     #submit-overlay .sub { font-size: 13px; color: #d4d4d8; max-width: 320px; }
+
+    /* Final Win32 Paintbrush-inspired chrome overrides. */
+    html, body {
+      font-family: "MS Sans Serif", Tahoma, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: none;
+      background: #c0c0c0;
+    }
+    #paint-titlebar {
+      height: 24px;
+      padding: 4px 6px;
+      border: 2px outset #dfdfdf;
+      background: #000080;
+      letter-spacing: 0;
+    }
+    #toolbar {
+      top: 26px;
+      left: 2px;
+      width: 70px;
+      display: grid;
+      grid-template-columns: repeat(2, 30px);
+      gap: 2px;
+      padding: 3px;
+      border: 2px outset #dfdfdf;
+      border-radius: 0;
+      background: #c0c0c0;
+      box-shadow: none;
+    }
+    #toolbar button {
+      width: 30px;
+      height: 30px;
+      padding: 4px;
+      border: 2px outset #dfdfdf;
+      border-radius: 0;
+      background: #c0c0c0;
+      color: #000;
+      transition: none;
+    }
+    #toolbar button:hover { background: #d4d4d4; }
+    #toolbar button.active {
+      border-style: inset;
+      background: #fff;
+      color: #000080;
+      outline: 1px dotted #000;
+      outline-offset: -4px;
+    }
+    #toolbar .divider { display: none; }
+    #mask-opacity-control {
+      position: absolute;
+      top: 26px;
+      left: 74px;
+      z-index: 7;
+      padding: 4px;
+      border: 2px outset #dfdfdf;
+      border-radius: 0;
+      background: #c0c0c0;
+      color: #000;
+    }
+    #sidebar {
+      border-left: 2px outset #dfdfdf;
+      background: #c0c0c0;
+    }
+    #sidebar-scroll { padding: 30px 10px 10px; }
+    .language-switch,
+    #new-instruction,
+    .group-card,
+    .group-card textarea,
+    #selection-group-control,
+    #selection-group,
+    #global-note,
+    #sidebar-footer,
+    #submit-button,
+    .reference-zone {
+      border-radius: 0;
+    }
+    .language-switch,
+    .group-card,
+    #selection-group-control,
+    #global-note,
+    .reference-zone {
+      border: 2px inset #dfdfdf;
+      background: #fff;
+    }
+    #new-instruction,
+    #submit-button,
+    .language-switch button {
+      border: 2px outset #dfdfdf;
+      background: #c0c0c0;
+      color: #000;
+    }
+    #new-instruction:active,
+    #submit-button:active,
+    .language-switch button.active {
+      border-style: inset;
+      background: #fff;
+      color: #000080;
+    }
+    .group-card.active {
+      border: 2px inset #dfdfdf;
+      outline: 2px solid #000080;
+      outline-offset: -4px;
+    }
+    .group-card[aria-disabled="true"] {
+      pointer-events: none;
+      opacity: 0.65;
+    }
+    #paint-statusbar {
+      position: absolute;
+      z-index: 7;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 27px;
+      display: grid;
+      grid-template-columns: minmax(150px, 1fr) auto auto;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 4px;
+      border: 2px outset #dfdfdf;
+      background: #c0c0c0;
+      color: #000;
+    }
+    #interaction-status,
+    #zoom-indicator {
+      position: static;
+      min-height: 19px;
+      padding: 2px 6px;
+      border: 2px inset #dfdfdf;
+      border-radius: 0;
+      background: #c0c0c0;
+      color: #000;
+      box-shadow: none;
+    }
+    #retro-palette {
+      display: grid;
+      grid-template-columns: repeat(8, 14px);
+      height: 18px;
+      border: 1px inset #dfdfdf;
+    }
+    #retro-palette i { display: block; border: 1px solid #202020; }
+    #canvas-empty-hint {
+      position: absolute;
+      z-index: 4;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      padding: 7px 10px;
+      border: 2px outset #dfdfdf;
+      background: #ffffcc;
+      color: #000;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
   <div id="app">
     <div id="canvas-area">
+      <div id="paint-titlebar" aria-label="Annotation window">Screen annotation</div>
       <img id="screenshot-source" alt="" />
       <canvas id="annotation-canvas" class="tool-pen"></canvas>
+      <div id="canvas-empty-hint">Mark the parts of the screen you want to change.</div>
       <div id="toolbar">
+        <button data-tool="select" title="Select / Move (V)" aria-label="Select or move marks">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="m5 3 14 8-7 2-3 7z"/></svg>
+        </button>
         <button data-tool="pen" title="Pen (P)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
         </button>
@@ -336,11 +505,6 @@
         <button data-tool="mask" title="Mask (M)">
           <svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="5" width="16" height="14" rx="2"/></svg>
         </button>
-        <div class="divider"></div>
-        <button data-tool="patch" title="Cut and move (C) — drag a source, then drag its destination">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1" stroke-dasharray="2 1.5"/><rect x="13" y="13" width="8" height="8" rx="1"/><path d="M11 11l2 2"/></svg>
-        </button>
-        <div class="divider"></div>
         <button data-tool="erase" title="Eraser (E)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H8.5L4 15.5a1.5 1.5 0 0 1 0-2.1l9-9a1.5 1.5 0 0 1 2.1 0l4.9 4.9a1.5 1.5 0 0 1 0 2.1L13.5 18"/><path d="M14.5 6.5 18 10"/></svg>
         </button>
@@ -352,7 +516,15 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10H10a5 5 0 0 0 0 10h7"/><path d="M16 5l5 5-5 5"/></svg>
         </button>
       </div>
-      <div id="zoom-indicator">100%</div>
+      <label id="mask-opacity-control" hidden><span id="mask-opacity-label">Mask opacity</span> <input id="mask-opacity" type="range" min="0.1" max="1" step="0.1" value="0.5" /></label>
+      <div id="paint-statusbar">
+        <span id="interaction-status" role="status" aria-live="polite">Select / Move · Group #1</span>
+        <span id="retro-palette" aria-hidden="true">
+          <i style="background:#000"></i><i style="background:#fff"></i><i style="background:#dc2626"></i><i style="background:#facc15"></i>
+          <i style="background:#16a34a"></i><i style="background:#2563eb"></i><i style="background:#9333ea"></i><i style="background:#06b6d4"></i>
+        </span>
+        <span id="zoom-indicator">100%</span>
+      </div>
     </div>
     <div id="sidebar">
       <div id="sidebar-scroll">
@@ -363,6 +535,7 @@
         <div class="section-label" id="groups-label">Instruction groups</div>
         <button id="new-instruction">+ New instruction</button>
         <div id="group-cards"></div>
+        <label id="selection-group-control"><span id="selection-group-control-text">Move selected marks to</span> <select id="selection-group" aria-label="Move selected marks to group"></select></label>
 
         <div class="section-label" id="global-note-label">Global note (optional)</div>
         <textarea id="global-note" placeholder="Describe the overall change..."></textarea>
@@ -392,6 +565,7 @@
     const COPY = {
       en: {
         title: 'Redpen — Annotate the screen',
+        windowTitle: 'Redpen - Screen annotation',
         groups: 'Instruction groups',
         newInstruction: '+ New instruction',
         globalNote: 'Global note (optional)',
@@ -408,13 +582,17 @@
         referenceAlt: 'Attached reference',
         removeReference: 'Remove reference',
         referenceLimit: 'Each instruction group can have up to three reference images.',
+        moveSelection: 'Move selected marks to',
+        deleteGroup: 'Delete empty group',
+        maskOpacity: 'Mask opacity',
         uploadFailed: (count) => `${count} image${count === 1 ? '' : 's'} could not be attached.`,
         attachedLimit: 'Only the first three images were attached.',
         emptyWarning: 'Draw at least one mark for this group',
+        canvasHint: 'Mark the parts of the screen you want to change.',
         tools: {
+          select: 'Select / Move (V) — Shift-click to add, Delete to remove, Esc to clear',
           pen: 'Pen (P)', arrow: 'Arrow (A)', line: 'Line (L)', rectangle: 'Rectangle (R)',
           ellipse: 'Ellipse (O)', text: 'Text area (T)', mask: 'Mask (M)',
-          patch: 'Cut and move (C) — drag a source, then drag its destination',
           erase: 'Eraser (E)',
         },
         undo: 'Undo (Ctrl+Z)',
@@ -422,6 +600,7 @@
       },
       ko: {
         title: 'Redpen — 화면에 지시 그리기',
+        windowTitle: 'Redpen - 화면 주석',
         groups: '지시 그룹',
         newInstruction: '+ 새 지시',
         globalNote: '전체 설명 (선택)',
@@ -438,13 +617,17 @@
         referenceAlt: '첨부 레퍼런스',
         removeReference: '레퍼런스 제거',
         referenceLimit: '각 지시 그룹에는 레퍼런스 이미지를 최대 3개까지 첨부할 수 있습니다.',
+        moveSelection: '선택한 표시를 그룹으로 이동',
+        deleteGroup: '빈 그룹 삭제',
+        maskOpacity: '마스크 투명도',
         uploadFailed: (count) => `${count}개 이미지를 첨부하지 못했습니다.`,
         attachedLimit: '최대 3장까지만 첨부했습니다.',
         emptyWarning: '아직 아무것도 그리지 않았어요',
+        canvasHint: '화면에서 수정할 부분을 표시하세요.',
         tools: {
+          select: '선택 / 이동 (V) — Shift+클릭 추가, Delete 삭제, Esc 해제',
           pen: '펜 (P)', arrow: '화살표 (A)', line: '직선 (L)', rectangle: '사각형 (R)',
           ellipse: '원 (O)', text: '텍스트 영역 (T)', mask: '가리기 (M)',
-          patch: '잘라서 옮기기 (C) — 드래그로 영역 선택 후 다시 드래그로 이동',
           erase: '지우개 (E)',
         },
         undo: '되돌리기 (Ctrl+Z)',
@@ -459,10 +642,12 @@
     img.src = `/api/sessions/${sessionId}/annotator/screenshot?token=${encodeURIComponent(token)}`;
 
     let app;
+    let lastRenderedActiveGroupId = null;
 
     function applyLocale() {
       document.documentElement.lang = locale;
       document.title = tr('title');
+      document.getElementById('paint-titlebar').textContent = tr('windowTitle');
       document.getElementById('groups-label').textContent = tr('groups');
       document.getElementById('new-instruction').textContent = tr('newInstruction');
       document.getElementById('global-note-label').textContent = tr('globalNote');
@@ -470,6 +655,9 @@
       document.getElementById('submit-button').textContent = tr('submit');
       document.getElementById('submit-overlay-headline').textContent = tr('submitted');
       document.getElementById('submit-overlay-sub').textContent = tr('submittedSub');
+      document.getElementById('selection-group-control-text').textContent = tr('moveSelection');
+      document.getElementById('canvas-empty-hint').textContent = tr('canvasHint');
+      document.getElementById('mask-opacity-label').textContent = tr('maskOpacity');
       document.getElementById('undo-button').title = tr('undo');
       document.getElementById('redo-button').title = tr('redo');
       for (const button of document.querySelectorAll('[data-locale]')) {
@@ -482,7 +670,7 @@
       if (app?.state) renderSidebar();
     }
 
-    const TOOL_KEYS = { p: 'pen', a: 'arrow', l: 'line', r: 'rectangle', o: 'ellipse', t: 'text', m: 'mask', e: 'erase', c: 'patch' };
+    const TOOL_KEYS = { v: 'select', p: 'pen', a: 'arrow', l: 'line', r: 'rectangle', o: 'ellipse', t: 'text', m: 'mask', e: 'erase' };
 
     function resizeCanvas() {
       const area = document.getElementById('canvas-area');
@@ -492,14 +680,12 @@
     }
 
     function selectTool(tool) {
-      if (app.tool === 'patch' && tool !== 'patch' && app.isAwaitingPatchDestination()) {
-        app.cancelPendingPatch();
-      }
       app.setTool(tool);
       canvas.className = `tool-${tool}`;
       for (const b of document.querySelectorAll('#toolbar button[data-tool]')) {
         b.classList.toggle('active', b.dataset.tool === tool);
       }
+      document.getElementById('mask-opacity-control').hidden = tool !== 'mask';
     }
 
     function updateZoomIndicator() {
@@ -553,7 +739,11 @@
       for (const button of document.querySelectorAll('#toolbar button[data-tool]')) {
         button.addEventListener('click', () => selectTool(button.dataset.tool));
       }
-      selectTool('pen');
+      document.getElementById('mask-opacity').addEventListener('input', (event) => app.previewMaskOpacity(Number(event.target.value)));
+      document.getElementById('mask-opacity').addEventListener('change', () => {
+        void app.commitMaskOpacity();
+      });
+      selectTool('select');
 
       document.addEventListener('keydown', (event) => {
         if (event.ctrlKey || event.metaKey) return; // undo/redo shortcuts are handled inside SessionAnnotatorApp
@@ -569,12 +759,30 @@
 
     function renderSidebar() {
       const state = app.state;
+      const mutationPending = app.isMutationInFlight();
+      document.getElementById('canvas-empty-hint').hidden = state.marks.length > 0;
+      for (const button of document.querySelectorAll('#toolbar button[data-tool]')) button.disabled = mutationPending;
+      document.getElementById('mask-opacity').disabled = mutationPending;
+      document.getElementById('new-instruction').disabled = mutationPending;
+      document.getElementById('global-note').disabled = mutationPending;
+      const selectionGroup = document.getElementById('selection-group');
+      selectionGroup.innerHTML = '';
+      for (const group of state.groups) {
+        const option = document.createElement('option');
+        option.value = group.id;
+        option.textContent = `#${group.number}`;
+        option.selected = group.id === state.activeGroupId;
+        selectionGroup.appendChild(option);
+      }
+      selectionGroup.disabled = mutationPending || !app.selectedMarkIds?.size;
+      selectionGroup.onchange = () => app.reassignSelection(selectionGroup.value);
       const container = document.getElementById('group-cards');
       container.innerHTML = '';
       for (const group of state.groups) {
         const card = document.createElement('div');
         card.className = 'group-card' + (group.id === state.activeGroupId ? ' active' : '');
         card.dataset.groupId = group.id;
+        card.setAttribute('aria-disabled', String(mutationPending));
 
         const head = document.createElement('div');
         head.className = 'head';
@@ -599,6 +807,7 @@
         const textarea = document.createElement('textarea');
         textarea.placeholder = tr('groupPlaceholder');
         textarea.value = group.note ?? '';
+        textarea.disabled = mutationPending;
         textarea.addEventListener('click', (e) => e.stopPropagation());
         textarea.addEventListener('change', async () => {
           await app.setGroupNote(group.id, textarea.value);
@@ -631,6 +840,7 @@
           remove.type = 'button';
           remove.title = tr('removeReference');
           remove.textContent = '×';
+          remove.disabled = mutationPending;
           remove.addEventListener('click', async (event) => {
             event.stopPropagation();
             await app.removeGroupReference(group.id, referenceId);
@@ -681,23 +891,45 @@
           if (!card.contains(event.relatedTarget)) referenceZone.classList.remove('drag-over');
         });
         card.addEventListener('drop', attachDroppedImage);
+        card.addEventListener('pointerenter', () => app.setHoveredGroup(group.id));
+        card.addEventListener('pointerleave', () => app.setHoveredGroup(null));
 
         if (group.markIds.length === 0) {
           const warning = document.createElement('div');
           warning.className = 'empty-warning';
           warning.textContent = tr('emptyWarning');
           card.appendChild(warning);
+          if (state.groups.length > 1 && group.referenceIds.length === 0) {
+            const removeGroup = document.createElement('button');
+            removeGroup.type = 'button';
+            removeGroup.textContent = '×';
+            removeGroup.title = tr('deleteGroup');
+            removeGroup.disabled = mutationPending;
+            removeGroup.addEventListener('click', async (event) => {
+              event.stopPropagation();
+              await app.deleteGroup(group.id);
+            });
+            head.appendChild(removeGroup);
+          }
         }
 
         card.addEventListener('click', async () => {
-          await app.setActiveGroup(group.id);
+          await app.focusGroup(group.id);
           renderSidebar();
         });
         container.appendChild(card);
       }
+      if (state.activeGroupId !== lastRenderedActiveGroupId) {
+        lastRenderedActiveGroupId = state.activeGroupId;
+        requestAnimationFrame(() => {
+          container.querySelector(`[data-group-id="${CSS.escape(state.activeGroupId)}"]`)?.scrollIntoView({ block: 'nearest' });
+        });
+      }
 
       document.getElementById('global-note').value = state.globalNote ?? '';
-      document.getElementById('submit-button').disabled = !state.canSubmit;
+      document.getElementById('undo-button').disabled = mutationPending || !state.canUndo;
+      document.getElementById('redo-button').disabled = mutationPending || !state.canRedo;
+      document.getElementById('submit-button').disabled = mutationPending || !state.canSubmit;
     }
 
     window.addEventListener('resize', resizeCanvas);

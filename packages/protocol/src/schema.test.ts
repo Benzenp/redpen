@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { instructionGroupSchema, visualTaskSchema, visualSessionSchema, SCHEMA_VERSION } from './schema.js';
+import {
+  annotationMarkCreateRequestSchema,
+  instructionGroupSchema,
+  visualTaskSchema,
+  visualSessionSchema,
+  SCHEMA_VERSION,
+} from './schema.js';
 
 function makeSampleTask() {
   return {
@@ -105,7 +111,11 @@ test('visualTask schema accepts a patch mark with sourceRect', () => {
     normalizedBounds: { x: 0.234, y: 0.222, width: 0.094, height: 0.089 },
     sourceRect: { x: 20, y: 30, width: 120, height: 80 },
   };
-  const withPatch = { ...task, marks: [...task.marks, patchMark] };
+  const withPatch = {
+    ...task,
+    groups: [{ ...task.groups[0], markIds: [...task.groups[0].markIds, patchMark.id] }],
+    marks: [...task.marks, patchMark],
+  };
   const parsed = visualTaskSchema.parse(withPatch);
   const reparsed = visualTaskSchema.parse(JSON.parse(JSON.stringify(parsed)));
   assert.deepEqual(reparsed.marks[1], patchMark);
@@ -123,7 +133,11 @@ test('visualTask schema round-trips a line mark', () => {
     from: { x: 400, y: 250 },
     to: { x: 640, y: 410 },
   };
-  const withLine = { ...task, marks: [...task.marks, lineMark] };
+  const withLine = {
+    ...task,
+    groups: [{ ...task.groups[0], markIds: [...task.groups[0].markIds, lineMark.id] }],
+    marks: [...task.marks, lineMark],
+  };
   const parsed = visualTaskSchema.parse(withLine);
   const reparsed = visualTaskSchema.parse(JSON.parse(JSON.stringify(parsed)));
   assert.deepEqual(reparsed.marks[1], lineMark);
@@ -163,6 +177,48 @@ test('visualTask schema rejects dangling, duplicate, and unattached reference as
       groups: [{ ...task.groups[0], referenceIds: [] }],
     }),
   );
+});
+
+test('visualTask schema rejects duplicate and inconsistent frame, group, mark, and target links', () => {
+  const task = makeSampleTask();
+  assert.throws(() => visualTaskSchema.parse({ ...task, frames: [...task.frames, task.frames[0]] }));
+  assert.throws(() => visualTaskSchema.parse({ ...task, groups: [...task.groups, task.groups[0]] }));
+  assert.throws(() => visualTaskSchema.parse({ ...task, marks: [...task.marks, task.marks[0]] }));
+  assert.throws(() => visualTaskSchema.parse({ ...task, targets: [...task.targets, task.targets[0]] }));
+  assert.throws(() => visualTaskSchema.parse({
+    ...task,
+    marks: [{ ...task.marks[0], frameId: 'frm_missing' }],
+  }));
+  assert.throws(() => visualTaskSchema.parse({
+    ...task,
+    marks: [{ ...task.marks[0], groupId: 'grp_missing' }],
+  }));
+  assert.throws(() => visualTaskSchema.parse({
+    ...task,
+    groups: [{ ...task.groups[0], markIds: [] }],
+  }));
+  assert.throws(() => visualTaskSchema.parse({
+    ...task,
+    groups: [{ ...task.groups[0], targetIds: [] }],
+  }));
+});
+
+test('annotation mark creation request is strict and requires complete type geometry', () => {
+  const rectangle = {
+    type: 'rectangle' as const,
+    frameId: 'frm_active',
+    bounds: { x: 1, y: 2, width: 3, height: 4 },
+    normalizedBounds: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+  };
+  assert.deepEqual(annotationMarkCreateRequestSchema.parse(rectangle), rectangle);
+  assert.throws(() => annotationMarkCreateRequestSchema.parse({ ...rectangle, id: 'mrk_injected' }));
+  assert.throws(() => annotationMarkCreateRequestSchema.parse({ ...rectangle, groupId: 'grp_injected' }));
+  assert.throws(() => annotationMarkCreateRequestSchema.parse({
+    type: 'mask',
+    frameId: 'frm_active',
+    bounds: rectangle.bounds,
+    normalizedBounds: rectangle.normalizedBounds,
+  }));
 });
 
 test('instruction group referenceIds must be unique and contain at most three IDs', () => {

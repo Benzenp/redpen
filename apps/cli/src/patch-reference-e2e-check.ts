@@ -13,7 +13,7 @@ import os from 'node:os';
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { chromium } from 'playwright';
+import { chromium, type Browser, type Page } from 'playwright';
 import { PNG } from 'pngjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -96,10 +96,35 @@ function solidPngBase64(width: number, height: number, rgba: [number, number, nu
   return PNG.sync.write(png).toString('base64');
 }
 
+async function screenshotPoint(page: Page, x: number, y: number): Promise<{ x: number; y: number }> {
+  return page.evaluate(({ x, y }) => {
+    const app = (window as unknown as { __redpenSessionApp: { scale: number; panX: number; panY: number } }).__redpenSessionApp;
+    return { x: x * app.scale + app.panX, y: y * app.scale + app.panY };
+  }, { x, y });
+}
+
+async function dragScreenshot(
+  page: Page,
+  canvasBox: { x: number; y: number },
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  shift = false,
+): Promise<void> {
+  const start = await screenshotPoint(page, from.x, from.y);
+  const end = await screenshotPoint(page, to.x, to.y);
+  if (shift) await page.keyboard.down('Shift');
+  await page.mouse.move(canvasBox.x + start.x, canvasBox.y + start.y);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox.x + end.x, canvasBox.y + end.y, { steps: 5 });
+  await page.mouse.up();
+  if (shift) await page.keyboard.up('Shift');
+}
+
 async function main() {
   const server = await startStaticServer(fixturePath);
-  const appDataDir = await mkdtemp(path.join(os.tmpdir(), 'redpen-patch-reference-e2e-appdata-'));
-  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'redpen-patch-reference-e2e-ws-'));
+  const appDataDir = await mkdtemp(path.join(os.tmpdir(), 'redpen-patch-reference-appdata-'));
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'redpen-patch-reference-ws-'));
+  let pwBrowser: Browser | null = null;
   const env = { ...jsonAppDataEnv(appDataDir), REDPEN_HEADLESS: '1' };
 
   try {
@@ -115,7 +140,7 @@ async function main() {
       token: string;
     };
 
-    const pwBrowser = await chromium.launch({ headless: true });
+    pwBrowser = await chromium.launch({ headless: true });
     const page = await pwBrowser.newPage({ viewport: { width: 1280, height: 900 } });
     await page.setExtraHTTPHeaders({ Authorization: `Bearer ${discovery.token}` });
     const annotatorUrl = `http://127.0.0.1:${discovery.port}/annotator/${sessionId}`;
@@ -126,31 +151,147 @@ async function main() {
     const box = await canvas.boundingBox();
     if (!box) throw new Error('canvas has no bounding box');
 
-    // --- patch tool: two-step crop+move drag ---
-    await page.click('#toolbar button[data-tool="patch"]');
-    // Step 1: select a source region.
-    await page.mouse.move(box.x + 100, box.y + 100);
-    await page.mouse.down();
-    await page.mouse.move(box.x + 160, box.y + 160, { steps: 5 });
-    await page.mouse.up();
-    await page.waitForTimeout(100);
-    const awaitingDestination = await page.evaluate(
-      () => (window as unknown as { __redpenSessionApp: { isAwaitingPatchDestination(): boolean } }).__redpenSessionApp.isAwaitingPatchDestination(),
+    // --- Select/Move: empty marquee creates a screenshot region ---
+    record(
+      'patch-is-not-a-toolbar-tool',
+      (await page.locator('#toolbar button[data-tool="patch"]').count()) === 0 &&
+        (await page.locator('#toolbar button[data-tool="select"].active').count()) === 1,
+      'select is active',
     );
-    record('patch-tool-enters-awaiting-destination-after-source-drag', awaitingDestination, `awaiting=${awaitingDestination}`);
+    await dragScreenshot(page, box, { x: 300, y: 200 }, { x: 360, y: 260 });
+    const region = await page.evaluate(() => {
+      const app = (window as unknown as {
+        __redpenSessionApp: { selectionBounds: { x: number; y: number; width: number; height: number } | null; state: { marks: unknown[] } };
+      }).__redpenSessionApp;
+      return { bounds: app.selectionBounds, markCount: app.state.marks.length };
+    });
+    record(
+      'empty-select-marquee-creates-an-ephemeral-region',
+      Boolean(region.bounds && region.bounds.width > 20 && region.bounds.height > 20 && region.markCount === 0),
+      JSON.stringify(region),
+    );
 
-    // Step 2: drag to the destination — this should commit a `patch` mark.
-    await page.mouse.move(box.x + 400, box.y + 400);
+    // Dragging that region previews real source pixels before committing.
+    const patchDragStart = await screenshotPoint(page, 330, 230);
+    const patchDragEnd = await screenshotPoint(page, 630, 530);
+    await page.mouse.move(box.x + patchDragStart.x, box.y + patchDragStart.y);
     await page.mouse.down();
-    await page.mouse.move(box.x + 460, box.y + 460, { steps: 5 });
+    await page.mouse.move(box.x + patchDragEnd.x, box.y + patchDragEnd.y, { steps: 6 });
+    const livePatchPreview = await page.evaluate(() => {
+      const app = (window as any).__redpenSessionApp;
+      const source = app.selectInitialBounds as { x: number; y: number; width: number; height: number };
+      const destination = app.selectionBounds as { x: number; y: number; width: number; height: number };
+      const image = document.getElementById('screenshot-source') as HTMLImageElement;
+      const canvas = document.getElementById('annotation-canvas') as HTMLCanvasElement;
+      const context = canvas.getContext('2d')!;
+      const sourceCanvasPoint = {
+        x: (source.x + source.width / 2) * app.scale + app.panX,
+        y: (source.y + source.height / 2) * app.scale + app.panY,
+      };
+      const destinationCanvasPoint = {
+        x: (destination.x + destination.width / 2) * app.scale + app.panX,
+        y: (destination.y + destination.height / 2) * app.scale + app.panY,
+      };
+      const sourcePixel = [...context.getImageData(Math.round(sourceCanvasPoint.x), Math.round(sourceCanvasPoint.y), 1, 1).data];
+      const destinationPixel = [...context.getImageData(Math.round(destinationCanvasPoint.x), Math.round(destinationCanvasPoint.y), 1, 1).data];
+      const sample = document.createElement('canvas');
+      sample.width = 1;
+      sample.height = 1;
+      const sampleContext = sample.getContext('2d')!;
+      const sourceScaleX = image.naturalWidth / app.state.viewport.width;
+      const sourceScaleY = image.naturalHeight / app.state.viewport.height;
+      sampleContext.drawImage(
+        image,
+        (source.x + source.width / 2) * sourceScaleX,
+        (source.y + source.height / 2) * sourceScaleY,
+        1,
+        1,
+        0,
+        0,
+        1,
+        1,
+      );
+      const expectedPixel = [...sampleContext.getImageData(0, 0, 1, 1).data];
+      return { mode: app.selectMode, sourcePixel, destinationPixel, expectedPixel };
+    });
+    const previewDistance = livePatchPreview.destinationPixel.reduce(
+      (sum, value, index) => sum + Math.abs(value - livePatchPreview.expectedPixel[index]),
+      0,
+    );
+    const sourceOverlayDistance = livePatchPreview.sourcePixel.reduce(
+      (sum, value, index) => sum + Math.abs(value - livePatchPreview.expectedPixel[index]),
+      0,
+    );
+    record(
+      'patch-placement-previews-cropped-pixels-before-pointer-up',
+      livePatchPreview.mode === 'patch' &&
+        sourceOverlayDistance > 20 &&
+        previewDistance < 100,
+      JSON.stringify({ ...livePatchPreview, previewDistance, sourceOverlayDistance }),
+    );
     await page.mouse.up();
-    await page.waitForTimeout(200);
+    await page.waitForFunction(
+      () => (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ type: string }> } } }).__redpenSessionApp.state.marks.some((mark) => mark.type === 'patch'),
+    );
 
     const marksAfterPatch = await page.evaluate(
       () => (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ type: string }> } } }).__redpenSessionApp.state.marks,
     );
     const patchMark = marksAfterPatch.find((m) => m.type === 'patch');
     record('patch-drag-commits-a-patch-mark', Boolean(patchMark), `marks=${JSON.stringify(marksAfterPatch.map((m) => m.type))}`);
+    const patchBeforeTransform = await page.evaluate(() => {
+      const app = (window as any).__redpenSessionApp as {
+        selectedMarkIds: Set<string>;
+        state: { marks: Array<{ id: string; type: string; groupId: string; sourceRect?: { x: number; y: number; width: number; height: number }; bounds: { x: number; y: number; width: number; height: number } }> };
+      };
+      const patch = app.state.marks.find((mark) => mark.type === 'patch')!;
+      return { id: patch.id, groupId: patch.groupId, sourceRect: patch.sourceRect, bounds: patch.bounds, selected: [...app.selectedMarkIds] };
+    });
+    record(
+      'new-patch-is-selected-with-stable-id-and-source-rect',
+      patchBeforeTransform.selected.length === 1 && patchBeforeTransform.selected[0] === patchBeforeTransform.id && Boolean(patchBeforeTransform.sourceRect),
+      JSON.stringify(patchBeforeTransform),
+    );
+    await dragScreenshot(
+      page,
+      box,
+      { x: patchBeforeTransform.bounds.x + patchBeforeTransform.bounds.width / 2, y: patchBeforeTransform.bounds.y + patchBeforeTransform.bounds.height / 2 },
+      { x: patchBeforeTransform.bounds.x + patchBeforeTransform.bounds.width / 2 + 70, y: patchBeforeTransform.bounds.y + patchBeforeTransform.bounds.height / 2 + 25 },
+    );
+    await page.waitForFunction(({ id, previousX }) => {
+      const app = (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ id: string; bounds: { x: number } }> } } }).__redpenSessionApp;
+      return (app.state.marks.find((mark) => mark.id === id)?.bounds.x ?? previousX) > previousX;
+    }, { id: patchBeforeTransform.id, previousX: patchBeforeTransform.bounds.x });
+    const patchAfterMove = await page.evaluate((id) => {
+      const app = (window as any).__redpenSessionApp as {
+        state: { marks: Array<{ id: string; groupId: string; sourceRect?: unknown; bounds: { x: number; y: number; width: number; height: number } }> };
+      };
+      return app.state.marks.find((mark) => mark.id === id)!;
+    }, patchBeforeTransform.id);
+    await dragScreenshot(
+      page,
+      box,
+      { x: patchAfterMove.bounds.x + patchAfterMove.bounds.width, y: patchAfterMove.bounds.y + patchAfterMove.bounds.height },
+      { x: patchAfterMove.bounds.x + patchAfterMove.bounds.width + 50, y: patchAfterMove.bounds.y + patchAfterMove.bounds.height + 10 },
+      true,
+    );
+    await page.waitForFunction(({ id, previousWidth }) => {
+      const app = (window as unknown as { __redpenSessionApp: { state: { marks: Array<{ id: string; bounds: { width: number } }> } } }).__redpenSessionApp;
+      return (app.state.marks.find((mark) => mark.id === id)?.bounds.width ?? previousWidth) > previousWidth;
+    }, { id: patchBeforeTransform.id, previousWidth: patchAfterMove.bounds.width });
+    const patchAfterResize = await page.evaluate((id) => {
+      const app = (window as any).__redpenSessionApp as {
+        state: { marks: Array<{ id: string; groupId: string; sourceRect?: unknown; bounds: { width: number; height: number } }> };
+      };
+      return app.state.marks.find((mark) => mark.id === id)!;
+    }, patchBeforeTransform.id);
+    record(
+      'patch-move-and-shift-resize-preserve-id-group-source-rect-and-aspect',
+      patchAfterResize.groupId === patchBeforeTransform.groupId &&
+        JSON.stringify(patchAfterResize.sourceRect) === JSON.stringify(patchBeforeTransform.sourceRect) &&
+        Math.abs(patchAfterResize.bounds.width / patchAfterResize.bounds.height - patchAfterMove.bounds.width / patchAfterMove.bounds.height) < 0.001,
+      JSON.stringify({ before: patchBeforeTransform, after: patchAfterResize }),
+    );
 
     // --- grouped references: paste one image, then drop two together ---
     const referencePngBase64 = solidPngBase64(20, 20, [0, 255, 0, 255]);
@@ -248,6 +389,7 @@ async function main() {
     record('submit-succeeds-with-patch-and-group-references', Boolean(taskId), submitStatusText ?? '');
 
     await pwBrowser.close();
+    pwBrowser = null;
 
     if (taskId) {
       const taskResult = await runCli(['task', taskId, '--project', workspaceRoot, '--json'], env);
@@ -349,6 +491,7 @@ async function main() {
     console.error(`\n${allPass ? 'ALL CHECKS PASSED' : 'SOME CHECKS FAILED'}`);
     if (!allPass) process.exitCode = 1;
   } finally {
+    await pwBrowser?.close().catch(() => {});
     await server.close();
     await stopDaemonIfRunning(appDataDir);
     await rm(appDataDir, { recursive: true, force: true }).catch(() => {});
