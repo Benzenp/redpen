@@ -17,3 +17,12 @@ fixtures/demo-app/.preview.png
 fixtures/demo-app/.ui-preview.png
 .gjc/
 taskhistory/
+
+# Stray screenshots/images dropped at the repository root.
+# Root-anchored so tracked assets in subdirectories (e.g.
+# apps/annotator/public/fixture-screenshot.png) are unaffected.
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
