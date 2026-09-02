@@ -8,6 +8,9 @@
     "node": ">=20"
   },
   "scripts": {
+    "typecheck": "corepack pnpm -r --if-present run typecheck",
+    "test": "corepack pnpm -r --if-present run test",
+    "verify": "corepack pnpm run typecheck && corepack pnpm run test && corepack pnpm run build",
     "build": "corepack pnpm --filter @redpen/annotator run build && corepack pnpm --filter @redpen/cli run build",
     "spike:capture": "corepack pnpm --filter @redpen/cli run spike:capture",
     "demo": "node fixtures/demo-app/serve.mjs",

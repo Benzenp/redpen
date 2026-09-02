@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+    branches: [master]
+
+# A newer push to the same branch/PR makes older in-flight runs irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Redpen ships a PowerShell installer and has Windows-specific daemon
+        # discovery, so Windows is a first-class target rather than an extra.
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Matches the `engines.node` floor declared in package.json.
+          node-version: "20"
+
+      # Enabled after setup-node so the shim points at the Node installed above.
+      # packageManager in package.json pins the exact pnpm version.
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Resolve pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(corepack pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      # The gate that was missing: esbuild strips types without checking them,
+      # so a type error can otherwise build and test green all the way to a release.
+      - name: Typecheck
+        run: corepack pnpm run typecheck
+
+      - name: Unit tests
+        run: corepack pnpm run test
+
+      - name: Build
+        run: corepack pnpm run build
+
+  package:
+    name: package CLI tarball
+    needs: verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Build
+        run: corepack pnpm run build
+
+      # Proves the documented release path still produces a tarball, so
+      # packaging breaks in CI instead of in a user's install script.
+      - name: Pack CLI
+        working-directory: apps/cli
+        run: corepack pnpm pack --pack-destination "${{ runner.temp }}"
+
+      - name: Upload CLI tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: redpen-cli
+          path: ${{ runner.temp }}/redpen-cli-*.tgz
+          if-no-files-found: error
