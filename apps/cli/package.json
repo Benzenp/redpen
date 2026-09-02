@@ -23,7 +23,7 @@
     "postinstall": "playwright install chromium",
     "spike:capture": "tsx src/spike/capture-spike.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/application/service-concurrency.test.ts src/application/url-policy.test.ts src/browser/manager.test.ts src/client/ensure-daemon.test.ts src/daemon/discovery.test.ts src/daemon/server-security.test.ts src/daemon/session-runtime.test.ts src/install.test.ts",
+    "test": "node ../../scripts/run-tests.mjs src",
     "test:lifecycle": "tsx src/lifecycle-check.ts",
     "test:mcp": "tsx src/mcp/mcp-check.ts",
     "test:review-loop": "tsx src/review-loop-check.ts",

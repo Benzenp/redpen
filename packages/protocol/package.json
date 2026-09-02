@@ -19,7 +19,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/*.test.ts"
+    "test": "node ../../scripts/run-tests.mjs src"
   },
   "dependencies": {
     "zod": "^3.23.8",
