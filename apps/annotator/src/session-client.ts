@@ -194,6 +194,7 @@ export class SessionAnnotatorApp {
   private hoveredGroupId: string | null = null;
   private pendingMarkOverrides = new Map<string, Mark>();
   private maskOpacity = 0.5;
+  private maskOpacityPreviewActive = false;
   private textEditor: HTMLTextAreaElement | null = null;
   private locale: 'en' | 'ko';
 
@@ -418,13 +419,26 @@ export class SessionAnnotatorApp {
 
   previewMaskOpacity(opacity: number): void {
     this.maskOpacity = Math.max(0.1, Math.min(1, opacity));
+    this.maskOpacityPreviewActive = true;
     this.render();
+  }
+
+  getDisplayedMaskOpacity(): number {
+    if (this.maskOpacityPreviewActive) return this.maskOpacity;
+    const selectedMasks = this.state?.marks.filter(
+      (mark) => this.selectedMarkIds.has(mark.id) && mark.type === 'mask',
+    ) ?? [];
+    return selectedMasks.length === 1 ? selectedMasks[0].opacity : this.maskOpacity;
   }
 
   commitMaskOpacity(): Promise<void> {
     const selectedMasks = this.state?.marks.filter((mark) => this.selectedMarkIds.has(mark.id) && mark.type === 'mask') ?? [];
-    if (selectedMasks.length === 0) return Promise.resolve();
-    return this.updateMaskStyle(selectedMasks.map((mark) => mark.id), this.maskOpacity);
+    if (selectedMasks.length === 0) {
+      this.maskOpacityPreviewActive = false;
+      return Promise.resolve();
+    }
+    return this.updateMaskStyle(selectedMasks.map((mark) => mark.id), this.maskOpacity)
+      .finally(() => { this.maskOpacityPreviewActive = false; });
   }
 
   isMutationInFlight(): boolean {

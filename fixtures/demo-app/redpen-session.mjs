@@ -97,7 +97,8 @@ async function cleanup(reason, exitCode = 0) {
     if (ownerTimer) clearInterval(ownerTimer);
 
     const failures = [];
-    if (sessionId) {
+    const sessionAlreadyGone = reason === 'session-closed' || reason === 'browser-or-daemon-closed';
+    if (sessionId && !sessionAlreadyGone) {
       try {
         const closeResult = await runCli(
           ['close', sessionId, '--shutdown-if-idle', '--json'],

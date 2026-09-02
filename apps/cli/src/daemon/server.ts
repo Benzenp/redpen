@@ -456,6 +456,9 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
   service.onBrowserClosed(() => {
     server.emit('redpenBrowserClosed');
   });
+  service.onTargetPageClosed(() => {
+    if (service.isIdle()) server.emit('redpenShutdownRequested');
+  });
 
   await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();

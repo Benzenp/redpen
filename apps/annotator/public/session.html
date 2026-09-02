@@ -281,7 +281,43 @@
       color: var(--ink);
     }
     #mask-opacity-control[hidden] { display: none; }
-    #mask-opacity { width: 110px; }
+    #mask-opacity {
+      width: 110px;
+      height: 18px;
+      margin: 0;
+      accent-color: var(--navy);
+      cursor: pointer;
+    }
+    #mask-opacity:disabled { cursor: default; }
+    #mask-opacity-preview {
+      position: relative;
+      width: 30px;
+      height: 18px;
+      flex: none;
+      overflow: hidden;
+      border: 2px inset var(--face-lt);
+      background:
+        linear-gradient(45deg, #b0b0b0 25%, transparent 25%, transparent 75%, #b0b0b0 75%),
+        linear-gradient(45deg, #b0b0b0 25%, #fff 25%, #fff 75%, #b0b0b0 75%);
+      background-position: 0 0, 4px 4px;
+      background-size: 8px 8px;
+    }
+    #mask-opacity-preview::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: var(--navy);
+      opacity: var(--mask-opacity, 0.5);
+    }
+    #mask-opacity-value {
+      width: 38px;
+      padding: 1px 3px;
+      background: var(--field);
+      border: 2px inset var(--face-lt);
+      color: var(--ink);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
 
     #canvas-empty-hint {
       position: absolute;
@@ -682,7 +718,12 @@
         <img id="screenshot-source" alt="" />
         <canvas id="annotation-canvas" class="tool-select"></canvas>
         <div id="canvas-empty-hint">Mark the parts of the screen you want to change.</div>
-        <label id="mask-opacity-control" hidden><span id="mask-opacity-label">Mask opacity</span> <input id="mask-opacity" type="range" min="0.1" max="1" step="0.1" value="0.5" /></label>
+        <label id="mask-opacity-control" hidden>
+          <span id="mask-opacity-label">Mask opacity</span>
+          <span id="mask-opacity-preview" aria-hidden="true"></span>
+          <input id="mask-opacity" type="range" min="0.1" max="1" step="0.1" value="0.5" />
+          <output id="mask-opacity-value" for="mask-opacity">50%</output>
+        </label>
       </div>
 
       <div id="sidebar">
@@ -1090,12 +1131,20 @@
       el('zoom-indicator').textContent = `${Math.round(app.scale * 100)}%`;
     }
 
+    function updateMaskOpacityControl(opacity) {
+      const normalized = Math.max(0.1, Math.min(1, Number(opacity) || 0.5));
+      el('mask-opacity').value = String(normalized);
+      el('mask-opacity-value').textContent = `${Math.round(normalized * 100)}%`;
+      el('mask-opacity-preview').style.setProperty('--mask-opacity', String(normalized));
+    }
+
     async function boot() {
       app = new window.RedpenSession.SessionAnnotatorApp({ canvas, screenshotImage: img, sessionId, token, locale });
       const baseRender = app.render.bind(app);
       app.render = () => {
         baseRender();
         updateZoomIndicator();
+        updateMaskOpacityControl(app.getDisplayedMaskOpacity());
       };
       app.onStateChange = renderSidebar;
       resizeCanvas();
@@ -1138,7 +1187,11 @@
       for (const button of document.querySelectorAll('#toolbar button[data-tool]')) {
         button.addEventListener('click', () => selectTool(button.dataset.tool));
       }
-      el('mask-opacity').addEventListener('input', (event) => app.previewMaskOpacity(Number(event.target.value)));
+      el('mask-opacity').addEventListener('input', (event) => {
+        const opacity = Number(event.target.value);
+        updateMaskOpacityControl(opacity);
+        app.previewMaskOpacity(opacity);
+      });
       el('mask-opacity').addEventListener('change', () => {
         void app.commitMaskOpacity();
       });

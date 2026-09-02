@@ -133,6 +133,16 @@ async function main() {
     }
     record('freeze-transitions-to-annotating', freezeJson.session.state === 'annotating', `state=${freezeJson.session.state}`);
 
+    // A second freeze replaces the pending capture instead of stranding the
+    // session in annotating with an HTTP 400.
+    const recaptureResult = await runCli(['freeze', sessionId, '--json'], env);
+    const recaptureJson = recaptureResult.stdout.trim() ? JSON.parse(recaptureResult.stdout.trim()) : {};
+    record(
+      'freeze-replaces-an-existing-capture',
+      recaptureResult.code === 0 && recaptureJson.session?.state === 'annotating',
+      `code=${recaptureResult.code} state=${recaptureJson.session?.state ?? 'missing'} stderr=${recaptureResult.stderr.slice(0, 500)}`,
+    );
+
     // --- user submit (stand-in: CLI submit call represents the UI's "N개 지시 제출") ---
     const submitResult = await runCli(['submit', sessionId, '--note', 'fix the button', '--json'], env);
     const submitJson = JSON.parse(submitResult.stdout.trim());

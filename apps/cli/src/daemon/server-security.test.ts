@@ -74,6 +74,21 @@ test('JSON limits and wait timeout reject before service work', async () => {
   });
 });
 
+test('closing an already absent session is an idempotent success', async () => {
+  await withDaemon(async (base, master) => {
+    const first = await fetch(`${base}/sessions/already-closed`, {
+      method: 'DELETE',
+      headers: masterHeaders(master),
+    });
+    const second = await fetch(`${base}/sessions/already-closed`, {
+      method: 'DELETE',
+      headers: masterHeaders(master),
+    });
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+  });
+});
+
 test('reference uploads reject invalid and oversized images predictably', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'redpen-server-security-'));
   try {

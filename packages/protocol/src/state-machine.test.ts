@@ -14,6 +14,7 @@ import { sessionStateSchema, taskStateSchema } from './schema.js';
 const ALL_SESSION_STATES = sessionStateSchema.options;
 const ALL_SESSION_TRANSITIONS: SessionTransition[] = [
   'freeze',
+  'discard-capture',
   'submit',
   'claim',
   'implementation-ready',
@@ -26,6 +27,8 @@ const ALL_SESSION_TRANSITIONS: SessionTransition[] = [
 
 const LEGAL_SESSION_TRANSITIONS: Array<[Parameters<typeof nextSessionState>[0], SessionTransition, string]> = [
   ['browsing', 'freeze', 'annotating'],
+  ['annotating', 'freeze', 'annotating'],
+  ['annotating', 'discard-capture', 'browsing'],
   ['annotating', 'submit', 'submitted'],
   ['submitted', 'claim', 'working'],
   ['working', 'implementation-ready', 'review'],

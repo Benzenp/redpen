@@ -145,11 +145,13 @@ const FREEZE_OVERLAY_SCRIPT_SOURCE = `(function(origin) {
     style.id = STYLE_ID;
     style.textContent =
       '#' + BUTTON_ID + ' { position: fixed; bottom: 20px; left: 20px; z-index: 2147483647;' +
-      ' padding: 10px 18px; border: none; border-radius: 999px;' +
-      ' background: #18181b; color: #fff; font: 600 13px system-ui, sans-serif;' +
-      ' box-shadow: 0 4px 12px rgba(0,0,0,.25); cursor: pointer; }' +
-      '#' + BUTTON_ID + ':hover { opacity: .85; }' +
-      '#' + BUTTON_ID + ':disabled { opacity: .5; cursor: not-allowed; }';
+      ' min-width: 158px; height: 34px; padding: 4px 12px; border: 2px outset #dfdfdf; border-radius: 0;' +
+      ' background: #c0c0c0; color: #000; font: 700 12px "MS Sans Serif","Microsoft Sans Serif",Tahoma,sans-serif;' +
+      ' box-shadow: inset 1px 1px 0 #fff,inset -1px -1px 0 #808080,2px 2px 0 rgba(0,0,0,.35); cursor: pointer; }' +
+      '#' + BUTTON_ID + ':hover:not(:disabled) { background: #dfdfdf; }' +
+      '#' + BUTTON_ID + ':focus-visible { outline: 1px dotted #000; outline-offset: -6px; }' +
+      '#' + BUTTON_ID + ':active:not(:disabled) { border-style: inset; box-shadow: inset 1px 1px 0 #000,inset -1px -1px 0 #dfdfdf; padding: 5px 11px 3px 13px; }' +
+      '#' + BUTTON_ID + ':disabled { color: #808080; text-shadow: 1px 1px 0 #fff; cursor: default; }';
     document.documentElement.appendChild(style);
 
     var button = document.createElement('button');
@@ -184,9 +186,13 @@ const FREEZE_OVERLAY_SCRIPT_SOURCE = `(function(origin) {
 export class BrowserManager {
   private context: BrowserContext | null = null;
   private contextPromise: Promise<BrowserContext> | null = null;
+  private initialPage: Page | null = null;
   private closing = false;
   private unexpectedContextCloseHandler: (() => void) | null = null;
+  private unexpectedTargetPageCloseHandler: ((sessionId: string) => void | Promise<void>) | null = null;
+  private unexpectedAnnotatorPageCloseHandler: ((sessionId: string) => void | Promise<void>) | null = null;
   private readonly closedContexts = new WeakSet<BrowserContext>();
+  private readonly intentionalPageCloses = new WeakSet<Page>();
   private readonly pages = new Map<string, Page>();
   private readonly annotatorPages = new Map<string, Page>();
   private readonly profileDir: string;
@@ -199,6 +205,14 @@ export class BrowserManager {
 
   onUnexpectedContextClose(handler: () => void): void {
     this.unexpectedContextCloseHandler = handler;
+  }
+
+  onUnexpectedTargetPageClose(handler: (sessionId: string) => void | Promise<void>): void {
+    this.unexpectedTargetPageCloseHandler = handler;
+  }
+
+  onUnexpectedAnnotatorPageClose(handler: (sessionId: string) => void | Promise<void>): void {
+    this.unexpectedAnnotatorPageCloseHandler = handler;
   }
 
   async ensureContext(): Promise<BrowserContext> {
@@ -238,22 +252,52 @@ export class BrowserManager {
       if (this.context === context) {
         this.context = null;
         this.contextPromise = null;
+        this.initialPage = null;
         this.pages.clear();
         this.annotatorPages.clear();
       }
       if (closedUnexpectedly) this.unexpectedContextCloseHandler?.();
     });
     this.context = context;
+    // A headed persistent Chromium context starts with one visible
+    // about:blank tab. Reuse it for the first target instead of opening a
+    // second tab and leaving the empty startup tab behind.
+    const startupPages = context.pages();
+    this.initialPage = startupPages.length === 1 && startupPages[0].url() === 'about:blank'
+      ? startupPages[0]
+      : null;
     return context;
   }
 
   private async closePageResource(page: Page): Promise<void> {
     if (page.isClosed()) return;
+    this.intentionalPageCloses.add(page);
     try {
       await page.close();
     } catch (error) {
-      if (!page.isClosed()) throw error;
+      if (!page.isClosed()) {
+        this.intentionalPageCloses.delete(page);
+        throw error;
+      }
     }
+  }
+
+  private trackTargetPage(sessionId: string, page: Page): void {
+    this.pages.set(sessionId, page);
+    page.once('close', () => {
+      if (this.pages.get(sessionId) === page) this.pages.delete(sessionId);
+      if (this.closing || this.intentionalPageCloses.has(page)) return;
+      void Promise.resolve(this.unexpectedTargetPageCloseHandler?.(sessionId)).catch(() => {});
+    });
+  }
+
+  private trackAnnotatorPage(sessionId: string, page: Page): void {
+    this.annotatorPages.set(sessionId, page);
+    page.once('close', () => {
+      if (this.annotatorPages.get(sessionId) === page) this.annotatorPages.delete(sessionId);
+      if (this.closing || this.intentionalPageCloses.has(page)) return;
+      void Promise.resolve(this.unexpectedAnnotatorPageCloseHandler?.(sessionId)).catch(() => {});
+    });
   }
 
   private async closeContextResource(context: BrowserContext): Promise<void> {
@@ -289,7 +333,10 @@ export class BrowserManager {
 
   async openPage(sessionId: string, url: string, overlayOrigin?: { port: number; token: string }): Promise<Page> {
     const context = await this.ensureContext();
-    const page = await context.newPage();
+    const page = this.initialPage && !this.initialPage.isClosed()
+      ? this.initialPage
+      : await context.newPage();
+    this.initialPage = null;
     try {
       if (overlayOrigin) {
         // addInitScript (not a one-off evaluate) so the freeze overlay
@@ -306,7 +353,7 @@ export class BrowserManager {
           (window as unknown as { __redpenSetSessionId?: (id: string) => void }).__redpenSetSessionId?.(sid);
         }, sessionId);
       }
-      this.pages.set(sessionId, page);
+      this.trackTargetPage(sessionId, page);
       return page;
     } catch (error) {
       await this.closePageResource(page);
@@ -346,7 +393,7 @@ export class BrowserManager {
     try {
       await page.goto(url, { waitUntil: 'load' });
       await page.bringToFront();
-      this.annotatorPages.set(sessionId, page);
+      this.trackAnnotatorPage(sessionId, page);
       return page;
     } catch (error) {
       await this.closePageResource(page);

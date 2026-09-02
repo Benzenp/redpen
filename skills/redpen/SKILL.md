@@ -45,6 +45,10 @@ is used exactly. Resolve the base origin in this order:
 4. the workspace's framework/dev-server configuration.
 
 Never choose an unrelated listener merely because it uses a common port. If
+discovery reports a complete URL, preserve its protocol, host, port, and base
+path verbatim; do not extract only the port and rebuild the URL as
+`http://127.0.0.1:<port>`. `localhost` and `127.0.0.1` are not interchangeable
+for cookie, host-header, and dev-server routing behavior. If
 the workspace server is not running, start the project's existing dev script
 as an owned process and apply the required lifecycle cleanup below. Start the
 submission waiter immediately after opening the session.

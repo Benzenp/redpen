@@ -328,3 +328,7 @@ skills/
 ## Status
 
 Redpen is a production-packaged local developer tool at version `0.2.0`. The CLI package is ready to pack and publish; no external service is required.
+
+## License
+
+Redpen is released under the [MIT License](LICENSE).

@@ -3,6 +3,8 @@
  *
  * ```
  * browsing --> annotating: freeze
+ * annotating --> annotating: freeze (replace the current capture)
+ * annotating --> browsing: discard capture (annotation tab closed)
  * annotating --> submitted: submit
  * submitted --> working: claim
  * working --> review: implementation ready
@@ -19,6 +21,7 @@ import type { SessionState, TaskState } from './schema.js';
 
 export type SessionTransition =
   | 'freeze'
+  | 'discard-capture'
   | 'submit'
   | 'claim'
   | 'implementation-ready'
@@ -30,7 +33,7 @@ export type SessionTransition =
 
 const SESSION_TRANSITIONS: Record<SessionState, Partial<Record<SessionTransition, SessionState>>> = {
   browsing: { freeze: 'annotating', cancel: 'cancelled', fail: 'error' },
-  annotating: { submit: 'submitted', cancel: 'cancelled', fail: 'error' },
+  annotating: { freeze: 'annotating', 'discard-capture': 'browsing', submit: 'submitted', cancel: 'cancelled', fail: 'error' },
   submitted: { claim: 'working' },
   working: { 'implementation-ready': 'review' },
   review: { 'annotate-revision': 'annotating', accept: 'done' },
