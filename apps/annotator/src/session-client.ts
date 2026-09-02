@@ -426,7 +426,8 @@ export class SessionAnnotatorApp {
   getDisplayedMaskOpacity(): number {
     if (this.maskOpacityPreviewActive) return this.maskOpacity;
     const selectedMasks = this.state?.marks.filter(
-      (mark) => this.selectedMarkIds.has(mark.id) && mark.type === 'mask',
+      (mark): mark is Extract<Mark, { type: 'mask' }> =>
+        this.selectedMarkIds.has(mark.id) && mark.type === 'mask',
     ) ?? [];
     return selectedMasks.length === 1 ? selectedMasks[0].opacity : this.maskOpacity;
   }
