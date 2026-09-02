@@ -179,7 +179,7 @@
     }
     .settings-form {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: minmax(0, 1fr) 180px;
       gap: 16px;
     }
     .settings-layout {
@@ -190,9 +190,19 @@
     }
     .settings-layout .stat-card {
       min-height: 118px;
+    }
+    .churn-card-content {
       display: flex;
-      flex-direction: column;
-      justify-content: center;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      min-height: 84px;
+    }
+    .churn-kitty {
+      flex: 0 0 auto;
+      width: 78px;
+      height: 70px;
+      color: #7c3aed;
     }
     .settings-form label {
       display: block;
@@ -252,32 +262,45 @@
     .chart-card h2 {
       margin: 0 0 8px;
     }
-    .chart-card svg {
-      display: block;
-      width: 100%;
-      height: 190px;
+    .pie-chart-layout {
+      min-height: 190px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: clamp(36px, 8vw, 96px);
     }
-    .chart-grid {
-      stroke: #e4e4e7;
-      stroke-width: 1;
+    .pie-chart {
+      width: 166px;
+      aspect-ratio: 1;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: conic-gradient(
+        #14b8a6 0 19%,
+        #22c1dc 19% 36%,
+        #c4a7e7 36% 51%,
+        #ffb84d 51% 69%,
+        #e46f73 69% 84%,
+        #5ca9e6 84% 100%
+      );
+      box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
     }
-    .chart-axis {
-      stroke: #71717a;
-      stroke-width: 1.4;
+    .pie-legend {
+      display: grid;
+      gap: 9px;
+      min-width: 180px;
+      font-size: 12px;
+      color: var(--muted);
     }
-    .chart-label {
-      fill: #71717a;
-      font: 10px system-ui, sans-serif;
+    .pie-legend-row {
+      display: grid;
+      grid-template-columns: 18px 1fr auto;
+      align-items: center;
+      gap: 8px;
     }
-    .chart-axis-title {
-      fill: #3f3f46;
-      font: 600 11px system-ui, sans-serif;
-    }
-    .chart-series {
-      fill: none;
-      stroke-width: 3;
-      stroke-linecap: round;
-      stroke-linejoin: round;
+    .pie-swatch {
+      width: 18px;
+      height: 10px;
+      border-radius: 2px;
     }
     dialog {
       width: min(480px, calc(100vw - 40px));
@@ -374,7 +397,6 @@
       </div>
 
       <section class="stat-grid" data-testid="stat-grid">
-        <div class="stat-slot-empty" aria-hidden="true"></div>
         <div class="stat-card" data-testid="stat-customers">
           <div class="label">활성 고객</div>
           <div class="value">1,204</div>
@@ -385,6 +407,7 @@
           <div class="value">₩48,290,000</div>
           <div class="delta up">▲ 12.4% 전월 대비</div>
         </div>
+        <div class="stat-slot-empty" aria-hidden="true"></div>
         <div class="stat-slot-empty" aria-hidden="true"></div>
       </section>
 
@@ -464,57 +487,36 @@
             </div>
           </div>
           <div class="stat-card" data-testid="stat-churn">
-            <div class="label">이탈률</div>
-            <div class="value">2.8%</div>
-            <div class="delta down">▼ 0.4%p</div>
+            <div class="churn-card-content">
+              <div>
+                <div class="label">이탈률</div>
+                <div class="value">2.8%</div>
+                <div class="delta down">▼ 0.4%p</div>
+              </div>
+              <svg class="churn-kitty" viewBox="0 0 96 86" role="img" aria-label="웃는 고양이">
+                <path d="M23 31 19 9l20 13a37 37 0 0 1 18 0L77 9l-4 22c6 7 9 15 9 24 0 18-15 27-34 27S14 73 14 55c0-9 3-17 9-24Z" fill="#ede9fe" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+                <path d="M30 49c3-4 7-4 10 0M56 49c3-4 7-4 10 0M44 58h8l-4 4-4-4Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M36 67c7 6 17 6 24 0" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+              </svg>
+            </div>
           </div>
         </div>
       </section>
 
       <div class="bottom-widgets-row">
         <section class="chart-card" data-testid="sales-time-chart">
-          <h2>매출·시간 그래프</h2>
-          <svg viewBox="0 0 680 190" role="img" aria-labelledby="sales-time-chart-title sales-time-chart-desc">
-            <title id="sales-time-chart-title">매출 금액에 따른 소요 시간 그래프</title>
-            <desc id="sales-time-chart-desc">가로축은 만원, 세로축은 한 시간 단위이며 국내와 해외 두 계열을 표시합니다.</desc>
-
-            <g class="chart-grid">
-              <path d="M50 25H650 M50 50H650 M50 75H650 M50 100H650 M50 125H650 M50 150H650" />
-              <path d="M50 25V150 M170 25V150 M290 25V150 M410 25V150 M530 25V150 M650 25V150" />
-            </g>
-            <g class="chart-axis">
-              <path d="M50 20V150H656" fill="none" />
-            </g>
-
-            <g class="chart-label" text-anchor="end">
-              <text x="43" y="153">0</text>
-              <text x="43" y="128">1시간</text>
-              <text x="43" y="103">2시간</text>
-              <text x="43" y="78">3시간</text>
-              <text x="43" y="53">4시간</text>
-              <text x="43" y="28">5시간</text>
-            </g>
-            <g class="chart-label" text-anchor="middle">
-              <text x="50" y="166">0</text>
-              <text x="170" y="166">20</text>
-              <text x="290" y="166">40</text>
-              <text x="410" y="166">60</text>
-              <text x="530" y="166">80</text>
-              <text x="650" y="166">100</text>
-            </g>
-            <text class="chart-axis-title" x="350" y="184" text-anchor="middle">매출 금액 (만원)</text>
-            <text class="chart-axis-title" x="13" y="88" text-anchor="middle" transform="rotate(-90 13 88)">소요 시간 (1시간 단위)</text>
-
-            <path class="chart-series" d="M50 137 L170 112 L290 92 L410 62 L530 72 L650 37" stroke="#3b82f6" />
-            <path class="chart-series" d="M50 143 L170 127 L290 105 L410 87 L530 57 L650 70" stroke="#ef4444" />
-
-            <g class="chart-label">
-              <line x1="480" y1="13" x2="500" y2="13" stroke="#3b82f6" stroke-width="3" />
-              <text x="506" y="16">국내</text>
-              <line x1="555" y1="13" x2="575" y2="13" stroke="#ef4444" stroke-width="3" />
-              <text x="581" y="16">해외</text>
-            </g>
-          </svg>
+          <h2>매출 구성</h2>
+          <div class="pie-chart-layout" role="img" aria-label="채널별 매출 구성 파이 차트">
+            <div class="pie-chart" aria-hidden="true"></div>
+            <div class="pie-legend" aria-hidden="true">
+              <div class="pie-legend-row"><span class="pie-swatch" style="background:#14b8a6"></span><span>온라인 스토어</span><strong>19%</strong></div>
+              <div class="pie-legend-row"><span class="pie-swatch" style="background:#22c1dc"></span><span>기업 계약</span><strong>17%</strong></div>
+              <div class="pie-legend-row"><span class="pie-swatch" style="background:#c4a7e7"></span><span>파트너</span><strong>15%</strong></div>
+              <div class="pie-legend-row"><span class="pie-swatch" style="background:#ffb84d"></span><span>마켓플레이스</span><strong>18%</strong></div>
+              <div class="pie-legend-row"><span class="pie-swatch" style="background:#e46f73"></span><span>리셀러</span><strong>15%</strong></div>
+              <div class="pie-legend-row"><span class="pie-swatch" style="background:#5ca9e6"></span><span>기타</span><strong>16%</strong></div>
+            </div>
+          </div>
         </section>
         <section class="customer-amount-card" data-testid="customer-amount-table-panel">
           <h2>고객별 금액</h2>

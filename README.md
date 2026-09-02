@@ -20,6 +20,34 @@ The agent receives a self-contained task bundle containing screenshots, vector m
   functional menus, group palette, and status bar
 - Local workspace storage only; no database or cloud service
 
+## See it in action
+
+Open a localhost app in Redpen's dedicated Chromium and freeze the exact state
+you want to discuss.
+
+![Acme Admin open in Redpen with the Freeze screen button](docs/assets/redpen-live-target.png)
+
+Draw directly on the captured interface, split unrelated changes into
+color-coded instruction groups, and attach visual references where words are
+not enough.
+
+![Four grouped visual instructions in the Redpen annotator](docs/assets/redpen-annotator-feedback.png)
+
+Before changing code, the agent translates the visual feedback into a concrete
+interpretation:
+
+1. Move the **Active Customers** card to the left to fill the empty KPI slot.
+2. Reduce the width of the notification settings area for a more compact layout.
+3. Replace the line chart at the bottom with a pie chart based on the attached reference.
+4. Add a cat illustration to the churn-rate card on the right.
+
+![The agent's English interpretation of the four instructions](docs/assets/redpen-intent-interpretation.png)
+
+After confirmation, the agent implements the changes and reloads the same
+target page for review.
+
+![The implemented dashboard with aligned KPIs, compact settings, a pie chart, and a cat illustration](docs/assets/redpen-implemented-result.png)
+
 ## Workflow
 
 ```text

@@ -26,3 +26,6 @@ taskhistory/
 /*.jpeg
 /*.gif
 /*.webp
+
+# Local source captures; README-ready copies live in docs/assets/.
+docs/스크린샷*.png
