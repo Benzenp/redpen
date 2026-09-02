@@ -4,8 +4,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { mock, test } from 'node:test';
+import { test } from 'node:test';
 import type { DaemonDiscovery } from '../daemon/discovery.js';
+import {
+  createEnsureDaemonRunning,
+  type DaemonStartupDependencies,
+} from './ensure-daemon.js';
 
 const discovery: DaemonDiscovery = {
   pid: 4321,
@@ -36,7 +40,6 @@ async function withTemporaryAppData(run: () => Promise<void>): Promise<void> {
   try {
     await run();
   } finally {
-    mock.reset();
     if (appData === undefined) delete process.env.APPDATA;
     else process.env.APPDATA = appData;
     if (xdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
@@ -52,16 +55,16 @@ async function loadEnsureDaemon(options: {
   clear?: () => Promise<void>;
   spawn: () => FakeChild;
 }) {
-  mock.module('../daemon/discovery.js', {
-    namedExports: {
-      readDaemonDiscovery: options.read,
-      probeDaemonHealth: options.health,
-      isProcessAlive: options.alive ?? (() => true),
-      clearDaemonDiscovery: options.clear ?? (async () => {}),
-    },
-  });
-  mock.module('node:child_process', { namedExports: { spawn: options.spawn } });
-  return import(`./ensure-daemon.js?test=${Math.random()}`);
+  const dependencies: DaemonStartupDependencies = {
+    readDiscovery: options.read,
+    probeHealth: options.health,
+    isProcessAlive: options.alive ?? (() => true),
+    clearDiscovery: options.clear ?? (async () => {}),
+    spawnDaemonProcess: options.spawn,
+  };
+  return {
+    ensureDaemonRunning: createEnsureDaemonRunning(dependencies),
+  };
 }
 
 test('ensureDaemonRunning serializes startup and accepts readiness after log lines', { concurrency: false }, async () => {
@@ -157,7 +160,6 @@ test('ensureDaemonRunning clears stale records without signaling an unverified l
     assert.equal(spawns, 1);
     assert.equal(cleared, true);
 
-    mock.reset();
     let liveCurrent: DaemonDiscovery | null = discovery;
     let liveCleared = false;
     const live = await loadEnsureDaemon({

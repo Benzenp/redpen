@@ -12,18 +12,42 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
+import type { Readable } from 'node:stream';
 import { globalAppDataDir } from '@redpen/protocol/paths';
 import { readDaemonDiscovery, isProcessAlive, probeDaemonHealth, clearDaemonDiscovery, type DaemonDiscovery } from '../daemon/discovery.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sourceDaemonEntry = path.resolve(__dirname, '../daemon/main.ts');
 const bundledDaemonEntry = path.resolve(__dirname, 'daemon.js');
-const startupLockPath = path.join(globalAppDataDir(), 'daemon-start.lock');
 const LOCK_WAIT_MS = 10_000;
 const LOCK_RETRY_MS = 50;
 const MALFORMED_LOCK_STALE_MS = 2_000;
 const READY_TIMEOUT_MS = 10_000;
 const MAX_STDERR_DIAGNOSTIC_BYTES = 4_096;
+
+interface DaemonChildProcess {
+  stdout: Readable | null;
+  stderr: Readable | null;
+  kill(): boolean;
+  unref(): void;
+  on(event: 'error', listener: (error: Error) => void): this;
+  on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
+  once(event: 'error', listener: (error: Error) => void): this;
+  once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
+  off(event: 'error', listener: (error: Error) => void): this;
+  off(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
+}
+
+export interface DaemonStartupDependencies {
+  readDiscovery(): Promise<DaemonDiscovery | null>;
+  probeHealth(
+    discovery: DaemonDiscovery,
+    timeoutMilliseconds?: number,
+  ): Promise<'running' | 'stale-pid' | 'hung' | 'not-running'>;
+  isProcessAlive(pid: number): boolean;
+  clearDiscovery(): Promise<void>;
+  spawnDaemonProcess(): DaemonChildProcess;
+}
 
 interface StartupLock {
   release(): Promise<void>;
@@ -34,45 +58,76 @@ interface LockOwner {
   token: string;
 }
 
-export async function ensureDaemonRunning(): Promise<DaemonDiscovery> {
-  const running = await findRunningDaemon();
-  if (running) return running;
+const defaultDependencies: DaemonStartupDependencies = {
+  readDiscovery: readDaemonDiscovery,
+  probeHealth: probeDaemonHealth,
+  isProcessAlive,
+  clearDiscovery: clearDaemonDiscovery,
+  spawnDaemonProcess: () => {
+    const daemonArgs = existsSync(bundledDaemonEntry)
+      ? [bundledDaemonEntry]
+      : [createRequire(import.meta.url).resolve('tsx/cli'), sourceDaemonEntry];
+    return spawn(process.execPath, daemonArgs, {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+  },
+};
 
-  const lock = await acquireStartupLock();
-  try {
-    // Another CLI may have started the daemon while this process waited for
-    // the lock, so discovery must be checked again while owning the lock.
-    const reread = await findRunningDaemon();
-    if (reread) return reread;
+export function createEnsureDaemonRunning(
+  dependencies: DaemonStartupDependencies,
+): () => Promise<DaemonDiscovery> {
+  return async () => {
+    const running = await findRunningDaemon(dependencies);
+    if (running) return running;
 
-    const discovery = await readDaemonDiscovery();
-    if (discovery) {
-      if (await waitForDaemonRecovery(discovery)) return discovery;
-      // Never signal an unauthenticated PID. Clearing the stale discovery
-      // lets a replacement start safely even when the OS reused that PID.
-      await clearDaemonDiscovery();
+    const lock = await acquireStartupLock(dependencies);
+    try {
+      // Another CLI may have started the daemon while this process waited for
+      // the lock, so discovery must be checked again while owning the lock.
+      const reread = await findRunningDaemon(dependencies);
+      if (reread) return reread;
+
+      const discovery = await dependencies.readDiscovery();
+      if (discovery) {
+        if (await waitForDaemonRecovery(discovery, dependencies)) return discovery;
+        // Never signal an unauthenticated PID. Clearing the stale discovery
+        // lets a replacement start safely even when the OS reused that PID.
+        await dependencies.clearDiscovery();
+      }
+      return await spawnDaemon(dependencies);
+    } finally {
+      await lock.release();
     }
-    return await spawnDaemon();
-  } finally {
-    await lock.release();
-  }
+  };
 }
 
-async function findRunningDaemon(): Promise<DaemonDiscovery | null> {
-  const discovery = await readDaemonDiscovery();
+export const ensureDaemonRunning = createEnsureDaemonRunning(defaultDependencies);
+
+async function findRunningDaemon(
+  dependencies: DaemonStartupDependencies,
+): Promise<DaemonDiscovery | null> {
+  const discovery = await dependencies.readDiscovery();
   if (!discovery) return null;
-  return (await probeDaemonHealth(discovery)) === 'running' ? discovery : null;
+  return (await dependencies.probeHealth(discovery)) === 'running' ? discovery : null;
 }
 
-async function waitForDaemonRecovery(discovery: DaemonDiscovery): Promise<boolean> {
+async function waitForDaemonRecovery(
+  discovery: DaemonDiscovery,
+  dependencies: DaemonStartupDependencies,
+): Promise<boolean> {
   for (let attempt = 0; attempt < 3; attempt++) {
-    if ((await probeDaemonHealth(discovery, 750)) === 'running') return true;
+    if ((await dependencies.probeHealth(discovery, 750)) === 'running') return true;
     if (attempt < 2) await delay(250);
   }
   return false;
 }
 
-async function acquireStartupLock(): Promise<StartupLock> {
+async function acquireStartupLock(
+  dependencies: DaemonStartupDependencies,
+): Promise<StartupLock> {
+  const startupLockPath = path.join(globalAppDataDir(), 'daemon-start.lock');
   await mkdir(globalAppDataDir(), { recursive: true, mode: 0o700 });
   if (process.platform !== 'win32') await chmod(globalAppDataDir(), 0o700);
 
@@ -91,7 +146,7 @@ async function acquireStartupLock(): Promise<StartupLock> {
       if (process.platform !== 'win32') await chmod(startupLockPath, 0o600);
       return {
         release: async () => {
-          const owner = await readLockOwner();
+          const owner = await readLockOwner(startupLockPath);
           if (owner?.token === token) await rm(startupLockPath, { force: true });
         },
       };
@@ -99,10 +154,10 @@ async function acquireStartupLock(): Promise<StartupLock> {
       await rm(temporaryLockPath, { force: true }).catch(() => undefined);
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
 
-      const owner = await readLockOwner();
+      const owner = await readLockOwner(startupLockPath);
       // A malformed lock, or one held by a PID which still exists, is not
       // demonstrably stale. Leave it in place and let the bounded wait fail.
-      if (owner && !isProcessAlive(owner.pid)) {
+      if (owner && !dependencies.isProcessAlive(owner.pid)) {
         await rm(startupLockPath, { force: true });
         continue;
       }
@@ -119,7 +174,7 @@ async function acquireStartupLock(): Promise<StartupLock> {
   throw new Error('timed out waiting for daemon startup lock');
 }
 
-async function readLockOwner(): Promise<LockOwner | null> {
+async function readLockOwner(startupLockPath: string): Promise<LockOwner | null> {
   try {
     const metadata = await lstat(startupLockPath);
     if (!metadata.isFile()) return null;
@@ -142,16 +197,11 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function spawnDaemon(): Promise<DaemonDiscovery> {
+function spawnDaemon(
+  dependencies: DaemonStartupDependencies,
+): Promise<DaemonDiscovery> {
   return new Promise((resolve, reject) => {
-    const daemonArgs = existsSync(bundledDaemonEntry)
-      ? [bundledDaemonEntry]
-      : [createRequire(import.meta.url).resolve('tsx/cli'), sourceDaemonEntry];
-    const child = spawn(process.execPath, daemonArgs, {
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
+    const child = dependencies.spawnDaemonProcess();
 
     let settled = false;
     let readinessSeen = false;
@@ -189,9 +239,9 @@ function spawnDaemon(): Promise<DaemonDiscovery> {
 
     const confirmReadiness = async () => {
       try {
-        const discovery = await readDaemonDiscovery();
+        const discovery = await dependencies.readDiscovery();
         if (!discovery) throw new Error('daemon started but discovery record is missing');
-        if ((await probeDaemonHealth(discovery)) !== 'running') {
+        if ((await dependencies.probeHealth(discovery)) !== 'running') {
           throw new Error('daemon started but failed authenticated health verification');
         }
         settle({ discovery });
