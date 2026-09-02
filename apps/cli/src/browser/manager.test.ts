@@ -62,7 +62,7 @@ test('unexpected Chromium close notifies the daemon but intentional shutdown doe
   } finally {
     await manager.closeAll();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await rm(profileDir, { recursive: true, force: true });
+    await rm(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -114,6 +114,6 @@ test('distinguishes user-closed target and annotator tabs from managed closes', 
   } finally {
     await manager.closeAll();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await rm(profileDir, { recursive: true, force: true });
+    await rm(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
