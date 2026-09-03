@@ -172,10 +172,27 @@ redpen review <session-id>
 redpen accept <session-id>
 redpen cancel <session-id>
 redpen close <session-id> [--shutdown-if-idle]
+
+redpen execution create --task "header" --task "chart" --project <workspace>
+redpen execution candidate-add <run-id> <task-id> --project <workspace>
+redpen execution diff <run-id> <task-id> <candidate-id> --project <workspace>
+redpen execution seal <run-id> <task-id> <candidate-id> --project <workspace>
+redpen execution select <run-id> <task-id> <candidate-id> --project <workspace>
+redpen execution preview <run-id> [--include <task-id,task-id>] --project <workspace>
+redpen execution final <run-id> [--include <task-id,task-id>] --project <workspace>
+redpen execution compare <run-id> --candidate <candidate-id>=<localhost-url> [--candidate ...] --project <workspace>
+
 redpen mcp
 ```
 
 Add `--json` for machine-readable output.
+
+Execution runs pin a base commit, create one isolated Git branch and worktree per
+candidate, and require each candidate to be sealed as one clean commit. Preview
+and final worktrees are rebuilt from the pinned base by cherry-picking the
+selected candidates in task order. `execution compare` opens up to nine
+interactive Chromium views in one review page using CDP screencasts, so it is
+not blocked by iframe CSP or `X-Frame-Options`.
 
 ### Browser mode
 

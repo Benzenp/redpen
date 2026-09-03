@@ -261,8 +261,25 @@ async function main(): Promise<number> {
             result = await client.buildExecutionIntegration(sub, runId, workspaceRoot, included);
             break;
           }
+          case 'compare': {
+            const runId = rest[1];
+            const assignments = flagValues(rest, '--candidate');
+            if (!runId || assignments.length === 0) {
+              printHuman('usage: redpen execution compare <run-id> --candidate <candidate-id>=<url> [--candidate ...] [--project <path>] [--json]');
+              return EXIT_CODES.USAGE_ERROR;
+            }
+            const candidates = assignments.map((assignment) => {
+              const separator = assignment.indexOf('=');
+              if (separator <= 0 || separator === assignment.length - 1) {
+                throw new Error(`invalid candidate URL assignment: ${assignment}`);
+              }
+              return { candidateId: assignment.slice(0, separator), url: assignment.slice(separator + 1) };
+            });
+            result = await client.openExecutionReview(runId, workspaceRoot, candidates);
+            break;
+          }
           default:
-            printHuman('usage: redpen execution <create|show|candidate-add|diff|seal|select|preview|final> [...] [--json] [--project <path>]');
+            printHuman('usage: redpen execution <create|show|candidate-add|diff|seal|select|preview|final|compare> [...] [--json] [--project <path>]');
             return EXIT_CODES.USAGE_ERROR;
         }
         if (json) printJson(result);

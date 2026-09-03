@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Execution review</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #12151b; color: #edf1f7; }
+    body { margin: 0; } main { max-width: 1500px; margin: auto; padding: 1.5rem; }
+    h1 { margin-top: 0; } #status { min-height: 1.5rem; color: #b8c2d1; }
+    .task { margin: 2rem 0; } .candidate-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
+    .candidate { background: #1b2029; border: 2px solid #475569; border-radius: .6rem; overflow: hidden; }
+    .candidate.selected { border-color: #46d39a; box-shadow: 0 0 0 2px #46d39a55; }
+    .candidate header { display: flex; align-items: center; gap: .5rem; padding: .75rem; } .candidate header span { margin-right: auto; }
+    .candidate img { display: block; box-sizing: border-box; width: 100%; aspect-ratio: 16 / 10; object-fit: contain; background: #080a0e; cursor: crosshair; }
+    button { font: inherit; padding: .4rem .65rem; color: inherit; background: #263244; border: 1px solid #64748b; border-radius: .3rem; cursor: pointer; }
+    button:focus-visible, img:focus-visible { outline: 3px solid #7dd3fc; outline-offset: 2px; } #actions { display: flex; gap: .75rem; margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Execution candidates</h1>
+    <p id="status" role="status" aria-live="polite">Loading candidates…</p>
+    <section id="tasks" aria-label="Candidate tasks"></section>
+    <div id="actions"><button id="apply-selection" type="button">Select candidates</button><button id="build-preview" type="button">Build preview</button></div>
+  </main>
+  <script type="module" src="/execution-review.js"></script>
+</body>
+</html>

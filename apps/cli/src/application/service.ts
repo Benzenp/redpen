@@ -8,6 +8,7 @@
 import type { Page } from 'playwright';
 import { randomUUID } from 'node:crypto';
 import { BrowserManager } from '../browser/manager.js';
+import { CandidateStreamManager, type CandidateFrame, type CandidateInput } from '../browser/candidate-stream.js';
 import { SessionRuntime } from '../daemon/session-runtime.js';
 import { saveSession, loadSession, listSessions, deleteSession } from './session-store.js';
 import { assertLoopbackUrl } from './url-policy.js';
@@ -34,6 +35,7 @@ import {
 import { compositeMarksOntoScreenshot } from '@redpen/annotator-core/composite';
 import { createRevision } from '@redpen/review';
 import { ExecutionManager } from '../execution/manager.js';
+import { ExecutionError } from '../execution/types.js';
 
 export class InvalidReferenceImageError extends Error {
   constructor() {
@@ -89,6 +91,7 @@ export interface OpenSessionOptions {
 
 export class RedpenApplicationService {
   private readonly browser = new BrowserManager();
+  private readonly candidateStreams = new CandidateStreamManager(this.browser);
   private readonly executions = new ExecutionManager();
   private readonly runtime = new SessionRuntime();
   // In-memory annotator stores keyed by sessionId, mirroring the annotating UI's
@@ -106,6 +109,8 @@ export class RedpenApplicationService {
   // still works via captureAndGround; only the actual tab-opening is skipped).
   private selfOrigin: { port: number } | undefined;
   private readonly capabilities = new Map<string, { overlay?: string; annotator?: string }>();
+  private readonly executionCapabilities = new Map<string, string>();
+  private readonly executionCandidates = new Map<string, Set<string>>();
   private readonly referenceMutationTails = new Map<string, Promise<void>>();
   private readonly lifecycleMutationTails = new Map<string, Promise<void>>();
   private readonly sessionReferenceIds = new Map<string, Set<string>>();
@@ -774,6 +779,96 @@ export class RedpenApplicationService {
     return this.executions.buildFinal(workspaceRoot, runId, includedTaskIds);
   }
 
+  hasExecutionCapability(runId: string, capability: string | null): boolean {
+    return Boolean(capability) && this.executionCapabilities.get(runId) === capability;
+  }
+
+  async openExecutionReview(
+    workspaceRoot: string,
+    runId: string,
+    candidateUrls: Array<{ candidateId: string; url: string }>,
+  ) {
+    if (!this.selfOrigin) throw new Error('daemon origin is unavailable');
+    const run = await this.executions.getRun(workspaceRoot, runId);
+    if (!Array.isArray(candidateUrls) || candidateUrls.length === 0 || candidateUrls.length > 9) {
+      throw new ExecutionError('execution review requires between 1 and 9 candidate URLs', 'INVALID_REVIEW_CANDIDATES');
+    }
+    const knownCandidates = new Set(
+      run.tasks.flatMap((task) => task.candidates.filter((candidate) => candidate.status === 'sealed').map((candidate) => candidate.id)),
+    );
+    const requestedIds = candidateUrls.map((candidate) => candidate.candidateId);
+    if (new Set(requestedIds).size !== requestedIds.length || requestedIds.some((id) => !knownCandidates.has(id))) {
+      throw new ExecutionError('execution review contains an unknown or duplicate candidate', 'INVALID_REVIEW_CANDIDATES');
+    }
+
+    await this.candidateStreams.closeAll();
+    await Promise.all([...this.executionCandidates.keys()].map((id) => this.browser.closeUtilityPage(`execution-${id}`)));
+    this.executionCandidates.clear();
+    this.executionCapabilities.clear();
+    const opened = new Set<string>();
+    try {
+      for (const candidate of candidateUrls) {
+        await this.candidateStreams.openCandidate(candidate.candidateId, candidate.url);
+        opened.add(candidate.candidateId);
+      }
+    } catch (error) {
+      await Promise.all([...opened].map((candidateId) => this.candidateStreams.closeCandidate(candidateId)));
+      throw error;
+    }
+
+    this.executionCandidates.set(runId, opened);
+    const capability = randomUUID();
+    this.executionCapabilities.set(runId, capability);
+    const query = new URLSearchParams({ workspaceRoot: run.workspaceRoot, token: capability });
+    const reviewUrl = `http://127.0.0.1:${this.selfOrigin.port}/execution-review/${encodeURIComponent(runId)}?${query}`;
+    try {
+      await this.browser.openUtilityPage(`execution-${runId}`, reviewUrl);
+    } catch (error) {
+      await this.candidateStreams.closeAll();
+      this.executionCandidates.delete(runId);
+      this.executionCapabilities.delete(runId);
+      throw error;
+    }
+    return { reviewUrl, candidates: this.executionStreamMetadata(runId) };
+  }
+
+  async getExecutionReview(workspaceRoot: string, runId: string) {
+    const run = await this.executions.getRun(workspaceRoot, runId);
+    const streams = new Map(this.executionStreamMetadata(runId).map((stream) => [stream.candidateId, stream]));
+    return {
+      ...run,
+      tasks: run.tasks.map((task) => ({
+        ...task,
+        candidates: task.candidates
+          .filter((candidate) => streams.has(candidate.id))
+          .map((candidate) => ({ ...candidate, ...streams.get(candidate.id), taskId: task.id })),
+      })),
+    };
+  }
+
+  subscribeExecutionCandidate(runId: string, candidateId: string, listener: (frame: CandidateFrame) => void): () => void {
+    this.assertExecutionCandidate(runId, candidateId);
+    return this.candidateStreams.subscribe(candidateId, listener);
+  }
+
+  async dispatchExecutionCandidateInput(runId: string, candidateId: string, input: CandidateInput): Promise<void> {
+    this.assertExecutionCandidate(runId, candidateId);
+    await this.candidateStreams.dispatchInput(candidateId, input);
+  }
+
+  private executionStreamMetadata(runId: string) {
+    const candidateIds = this.executionCandidates.get(runId) ?? new Set<string>();
+    return [...candidateIds]
+      .map((candidateId) => this.candidateStreams.getCandidate(candidateId))
+      .filter((candidate) => candidate !== undefined);
+  }
+
+  private assertExecutionCandidate(runId: string, candidateId: string): void {
+    if (!this.executionCandidates.get(runId)?.has(candidateId)) {
+      throw new ExecutionError(`candidate is not open for execution review: ${candidateId}`, 'CANDIDATE_NOT_FOUND');
+    }
+  }
+
   async claim(sessionId: string): Promise<VisualSession> {
     return this.transition(sessionId, 'claim');
   }
@@ -864,6 +959,7 @@ export class RedpenApplicationService {
   async shutdown(): Promise<void> {
     await Promise.allSettled(this.closeOperations.values());
     this.runtime.clear();
+    await this.candidateStreams.closeAll();
     await this.browser.closeAll();
   }
 }

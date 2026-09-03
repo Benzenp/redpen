@@ -195,6 +195,7 @@ export class BrowserManager {
   private readonly intentionalPageCloses = new WeakSet<Page>();
   private readonly pages = new Map<string, Page>();
   private readonly annotatorPages = new Map<string, Page>();
+  private readonly utilityPages = new Map<string, Page>();
   private readonly profileDir: string;
   private readonly headless: boolean;
 
@@ -255,6 +256,7 @@ export class BrowserManager {
         this.initialPage = null;
         this.pages.clear();
         this.annotatorPages.clear();
+        this.utilityPages.clear();
       }
       if (closedUnexpectedly) this.unexpectedContextCloseHandler?.();
     });
@@ -405,6 +407,36 @@ export class BrowserManager {
     return this.annotatorPages.get(sessionId);
   }
 
+  async openUtilityPage(id: string, url: string): Promise<Page> {
+    const existing = this.utilityPages.get(id);
+    if (existing && !existing.isClosed()) {
+      await existing.goto(url, { waitUntil: 'load' });
+      await existing.bringToFront();
+      return existing;
+    }
+    const context = await this.ensureContext();
+    const page = await context.newPage();
+    try {
+      await page.goto(url, { waitUntil: 'load' });
+      await page.bringToFront();
+      this.utilityPages.set(id, page);
+      page.once('close', () => {
+        if (this.utilityPages.get(id) === page) this.utilityPages.delete(id);
+      });
+      return page;
+    } catch (error) {
+      await this.closePageResource(page);
+      throw error;
+    }
+  }
+
+  async closeUtilityPage(id: string): Promise<void> {
+    const page = this.utilityPages.get(id);
+    if (!page) return;
+    await this.closePageResource(page);
+    this.utilityPages.delete(id);
+  }
+
   /**
    * Closes only the annotation-UI tab for `sessionId`, leaving the target
    * page (and its freeze overlay) open. Called by the daemon after a
@@ -443,6 +475,9 @@ export class BrowserManager {
       for (const sessionId of [...this.pages.keys(), ...this.annotatorPages.keys()]) {
         await this.closePage(sessionId);
       }
+      for (const id of [...this.utilityPages.keys()]) {
+        await this.closeUtilityPage(id);
+      }
       const context = this.context;
       if (context) {
         await this.closeContextResource(context);
@@ -451,6 +486,7 @@ export class BrowserManager {
           this.contextPromise = null;
           this.pages.clear();
           this.annotatorPages.clear();
+          this.utilityPages.clear();
         }
       }
     } finally {

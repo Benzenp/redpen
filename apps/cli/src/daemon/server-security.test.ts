@@ -108,3 +108,64 @@ test('reference uploads reject invalid and oversized images predictably', async 
     await rm(workspaceRoot, { recursive: true, force: true });
   }
 });
+
+test('execution comparison routes use a run-scoped capability and stream frames', async () => {
+  await withDaemon(async (base, _master, service) => {
+    const runId = 'run-test';
+    const candidateId = 'candidate-test';
+    const capability = 'execution-capability';
+    const internals = service as unknown as {
+      executionCapabilities: Map<string, string>;
+      getExecutionReview: () => Promise<unknown>;
+      subscribeExecutionCandidate: (
+        runId: string,
+        candidateId: string,
+        listener: (frame: unknown) => void,
+      ) => () => void;
+      dispatchExecutionCandidateInput: () => Promise<void>;
+    };
+    internals.executionCapabilities.set(runId, capability);
+    internals.getExecutionReview = async () => ({ id: runId, tasks: [] });
+    let unsubscribed = false;
+    internals.subscribeExecutionCandidate = (_runId, _candidateId, listener) => {
+      setImmediate(() => listener({
+        candidateId,
+        data: 'frame',
+        mimeType: 'image/jpeg',
+        width: 100,
+        height: 80,
+        timestamp: 1,
+      }));
+      return () => { unsubscribed = true; };
+    };
+    let inputs = 0;
+    internals.dispatchExecutionCandidateInput = async () => { inputs++; };
+
+    assert.equal((await fetch(`${base}/execution-review/${runId}`)).status, 401);
+    assert.equal((await fetch(`${base}/execution-review/${runId}?token=${capability}`)).status, 200);
+    assert.equal((await fetch(`${base}/api/executions/${runId}?workspaceRoot=x&token=wrong`)).status, 401);
+    assert.equal((await fetch(`${base}/api/executions/${runId}?workspaceRoot=x&token=${capability}`)).status, 200);
+
+    const events = await fetch(`${base}/api/executions/${runId}/candidates/${candidateId}/events?token=${capability}`);
+    assert.equal(events.status, 200);
+    const reader = events.body!.getReader();
+    const decoder = new TextDecoder();
+    let received = '';
+    while (!received.includes('"data":"frame"')) {
+      const chunk = await reader.read();
+      assert.equal(chunk.done, false);
+      received += decoder.decode(chunk.value, { stream: true });
+    }
+    await reader.cancel();
+
+    const input = await fetch(`${base}/api/executions/${runId}/candidates/${candidateId}/input`, {
+      method: 'POST',
+      headers: jsonHeaders(capability),
+      body: JSON.stringify({ type: 'pointerMove', x: 0.5, y: 0.5 }),
+    });
+    assert.equal(input.status, 200);
+    assert.equal(inputs, 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(unsubscribed, true);
+  });
+});

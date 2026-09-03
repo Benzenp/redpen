@@ -132,4 +132,12 @@ export class DaemonClient {
   buildExecutionIntegration(kind: 'preview' | 'final', runId: string, workspaceRoot: string, includedTaskIds?: string[]) {
     return this.request<{ result: unknown }>('POST', `/executions/${runId}/${kind}`, { workspaceRoot, includedTaskIds });
   }
+
+  openExecutionReview(runId: string, workspaceRoot: string, candidates: Array<{ candidateId: string; url: string }>) {
+    return this.request<{ review: { reviewUrl: string; candidates: unknown[] } }>(
+      'POST',
+      `/executions/${runId}/review`,
+      { workspaceRoot, candidates },
+    );
+  }
 }

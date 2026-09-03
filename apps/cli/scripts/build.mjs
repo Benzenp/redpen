@@ -46,7 +46,7 @@ await esbuild.build({
 });
 
 await mkdir(publicDir, { recursive: true });
-for (const asset of ['session.html', 'session.bundle.js']) {
+for (const asset of ['session.html', 'session.bundle.js', 'execution-review.html', 'execution-review.js']) {
   await copyFile(path.join(repositoryRoot, 'apps/annotator/public', asset), path.join(publicDir, asset));
 }
 

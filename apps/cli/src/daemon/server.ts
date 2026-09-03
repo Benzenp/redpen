@@ -27,6 +27,7 @@ import { UnsupportedUrlError } from '../application/url-policy.js';
 import { InvalidSessionTransitionError } from '@redpen/protocol/state-machine';
 import { AnnotatorStoreError } from '@redpen/annotator-core';
 import { ExecutionError } from '../execution/types.js';
+import { CandidateStreamError, type CandidateInput } from '../browser/candidate-stream.js';
 import { z } from 'zod';
 import {
   annotationMarkCreateRequestSchema,
@@ -76,6 +77,7 @@ function errorToHttpStatus(err: unknown): number {
     if (err.code === 'CHERRY_PICK_FAILED' || err.code === 'DIRTY_CANDIDATE') return 409;
     return 400;
   }
+  if (err instanceof CandidateStreamError) return err.code === 'CANDIDATE_NOT_FOUND' ? 404 : 400;
   return 500;
 }
 
@@ -160,10 +162,23 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
         return;
       }
 
+      if (req.method === 'GET' && parts[0] === 'execution-review.js' && !parts[1]) {
+        const js = await readFile(path.join(annotatorPublicDir, 'execution-review.js'));
+        res.writeHead(200, {
+          'Content-Type': STATIC_CONTENT_TYPES['.js'],
+          'Cache-Control': 'no-store',
+          'Referrer-Policy': 'no-referrer',
+        });
+        res.end(js);
+        return;
+      }
+
       const isOverlayFreezeRoute = req.method === 'POST' && parts[0] === 'sessions' && parts[1] !== undefined && parts[2] === 'freeze';
       const isOverlayStatusRoute = req.method === 'GET' && parts[0] === 'sessions' && parts[1] !== undefined && !parts[2];
       const isAnnotatorTabRoute = req.method === 'GET' && parts[0] === 'annotator' && parts[1] !== undefined && !parts[2];
       const isAnnotatorApiRoute = parts[0] === 'api' && parts[1] === 'sessions' && parts[2] !== undefined && parts[3] === 'annotator';
+      const isExecutionReviewRoute = req.method === 'GET' && parts[0] === 'execution-review' && parts[1] !== undefined && !parts[2];
+      const isExecutionApiRoute = parts[0] === 'api' && parts[1] === 'executions' && parts[2] !== undefined;
       const browserSessionId = isOverlayFreezeRoute || isOverlayStatusRoute
         ? parts[1]
         : isAnnotatorTabRoute
@@ -175,13 +190,16 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
       const queryToken = url.searchParams.get('token');
       const headerCapability = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : null;
       const masterAuthorized = auth === `Bearer ${token}`;
-      const authorized = masterAuthorized || (browserSessionId
-        ? service.hasBrowserCapability(
+      const executionRunId = isExecutionReviewRoute || isExecutionApiRoute ? parts[isExecutionReviewRoute ? 1 : 2] : undefined;
+      const authorized = masterAuthorized || (executionRunId
+        ? service.hasExecutionCapability(executionRunId, queryToken ?? headerCapability)
+        : browserSessionId
+          ? service.hasBrowserCapability(
             browserSessionId,
             isOverlayFreezeRoute || isOverlayStatusRoute ? 'overlay' : 'annotator',
             queryToken ?? headerCapability,
           )
-        : false);
+          : false);
       if (browserSessionId) {
         res.setHeader('Cache-Control', 'no-store');
         res.setHeader('Referrer-Policy', 'no-referrer');
@@ -205,6 +223,17 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
 
       if (req.method === 'GET' && parts[0] === 'annotator' && parts[1]) {
         const html = await readFile(path.join(annotatorPublicDir, 'session.html'), 'utf8');
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Referrer-Policy': 'no-referrer',
+        });
+        res.end(html);
+        return;
+      }
+
+      if (req.method === 'GET' && parts[0] === 'execution-review' && parts[1]) {
+        const html = await readFile(path.join(annotatorPublicDir, 'execution-review.html'), 'utf8');
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'no-store',
@@ -449,6 +478,55 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
         return;
       }
 
+      // --- Interactive candidate comparison API ---
+      if (parts[0] === 'api' && parts[1] === 'executions' && parts[2]) {
+        const runId = parts[2];
+        if (req.method === 'GET' && !parts[3]) {
+          const workspaceRoot = url.searchParams.get('workspaceRoot') ?? '';
+          const run = await service.getExecutionReview(workspaceRoot, runId);
+          send(200, { run });
+          return;
+        }
+        if (parts[3] === 'candidates' && parts[4] && parts[5] === 'events' && req.method === 'GET') {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-store',
+            Connection: 'keep-alive',
+            'Referrer-Policy': 'no-referrer',
+          });
+          res.write(': connected\n\n');
+          const unsubscribe = service.subscribeExecutionCandidate(runId, parts[4], (frame) => {
+            if (!res.destroyed) res.write(`data: ${JSON.stringify(frame)}\n\n`);
+          });
+          const heartbeat = setInterval(() => {
+            if (!res.destroyed) res.write(': heartbeat\n\n');
+          }, 15_000);
+          req.once('close', () => {
+            clearInterval(heartbeat);
+            unsubscribe();
+          });
+          return;
+        }
+        if (parts[3] === 'candidates' && parts[4] && parts[5] === 'input' && req.method === 'POST') {
+          const body = (await readJsonBody(req)) as CandidateInput & { workspaceRoot?: string };
+          await service.dispatchExecutionCandidateInput(runId, parts[4], body);
+          send(200, { ok: true });
+          return;
+        }
+        if (req.method === 'POST' && parts[3] === 'select' && !parts[4]) {
+          const body = (await readJsonBody(req)) as { workspaceRoot: string; taskId: string; candidateId: string };
+          const run = await service.selectExecutionCandidate(body.workspaceRoot, runId, body.taskId, body.candidateId);
+          send(200, { run });
+          return;
+        }
+        if (req.method === 'POST' && parts[3] === 'preview' && !parts[4]) {
+          const body = (await readJsonBody(req)) as { workspaceRoot: string; includedTaskIds?: string[] };
+          const result = await service.buildExecutionPreview(body.workspaceRoot, runId, body.includedTaskIds);
+          send(200, { result });
+          return;
+        }
+      }
+
       // --- Git-isolated execution API: /executions/:runId/* ---
       if (req.method === 'POST' && parts[0] === 'executions' && !parts[1]) {
         const body = (await readJsonBody(req)) as { workspaceRoot: string; taskNames: string[]; baseRef?: string };
@@ -459,6 +537,15 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
 
       if (parts[0] === 'executions' && parts[1]) {
         const runId = parts[1];
+        if (req.method === 'POST' && parts[2] === 'review' && !parts[3]) {
+          const body = (await readJsonBody(req)) as {
+            workspaceRoot: string;
+            candidates: Array<{ candidateId: string; url: string }>;
+          };
+          const review = await service.openExecutionReview(body.workspaceRoot, runId, body.candidates);
+          send(200, { review });
+          return;
+        }
         if (req.method === 'GET' && !parts[2]) {
           const workspaceRoot = url.searchParams.get('workspaceRoot') ?? '';
           const run = await service.getExecutionRun(workspaceRoot, runId);
