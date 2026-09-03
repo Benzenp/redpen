@@ -33,6 +33,7 @@ import {
 } from '@redpen/annotator-core';
 import { compositeMarksOntoScreenshot } from '@redpen/annotator-core/composite';
 import { createRevision } from '@redpen/review';
+import { ExecutionManager } from '../execution/manager.js';
 
 export class InvalidReferenceImageError extends Error {
   constructor() {
@@ -88,6 +89,7 @@ export interface OpenSessionOptions {
 
 export class RedpenApplicationService {
   private readonly browser = new BrowserManager();
+  private readonly executions = new ExecutionManager();
   private readonly runtime = new SessionRuntime();
   // In-memory annotator stores keyed by sessionId, mirroring the annotating UI's
   // authoring state until submit. Not persisted — a daemon restart loses drafts
@@ -738,6 +740,38 @@ export class RedpenApplicationService {
 
   async listTasks(workspaceRoot: string) {
     return listTaskIds(workspaceRoot);
+  }
+
+  async createExecutionRun(options: { workspaceRoot: string; taskNames: string[]; baseRef?: string }) {
+    return this.executions.createRun(options);
+  }
+
+  async getExecutionRun(workspaceRoot: string, runId: string) {
+    return this.executions.getRun(workspaceRoot, runId);
+  }
+
+  async addExecutionCandidate(workspaceRoot: string, runId: string, taskId: string) {
+    return this.executions.addCandidate(workspaceRoot, runId, taskId);
+  }
+
+  async inspectExecutionCandidate(workspaceRoot: string, runId: string, taskId: string, candidateId: string) {
+    return this.executions.inspectCandidate(workspaceRoot, runId, taskId, candidateId);
+  }
+
+  async sealExecutionCandidate(workspaceRoot: string, runId: string, taskId: string, candidateId: string) {
+    return this.executions.sealCandidate(workspaceRoot, runId, taskId, candidateId);
+  }
+
+  async selectExecutionCandidate(workspaceRoot: string, runId: string, taskId: string, candidateId: string) {
+    return this.executions.selectCandidate(workspaceRoot, runId, taskId, candidateId);
+  }
+
+  async buildExecutionPreview(workspaceRoot: string, runId: string, includedTaskIds?: string[]) {
+    return this.executions.buildPreview(workspaceRoot, runId, includedTaskIds);
+  }
+
+  async buildExecutionFinal(workspaceRoot: string, runId: string, includedTaskIds?: string[]) {
+    return this.executions.buildFinal(workspaceRoot, runId, includedTaskIds);
   }
 
   async claim(sessionId: string): Promise<VisualSession> {

@@ -26,6 +26,7 @@ import { SessionNotFoundError, TaskNotFoundError, NoActiveCaptureError } from '.
 import { UnsupportedUrlError } from '../application/url-policy.js';
 import { InvalidSessionTransitionError } from '@redpen/protocol/state-machine';
 import { AnnotatorStoreError } from '@redpen/annotator-core';
+import { ExecutionError } from '../execution/types.js';
 import { z } from 'zod';
 import {
   annotationMarkCreateRequestSchema,
@@ -70,6 +71,11 @@ function errorToHttpStatus(err: unknown): number {
   if (err instanceof UnsupportedMediaTypeError) return 415;
   if (err instanceof RequestBodyTooLargeError || err instanceof ReferenceImageTooLargeError) return 413;
   if (err instanceof NoActiveCaptureError || err instanceof GroupReferenceLimitError || err instanceof AnnotationSubmissionInProgressError) return 409;
+  if (err instanceof ExecutionError) {
+    if (err.code.endsWith('NOT_FOUND')) return 404;
+    if (err.code === 'CHERRY_PICK_FAILED' || err.code === 'DIRTY_CANDIDATE') return 409;
+    return 400;
+  }
   return 500;
 }
 
@@ -441,6 +447,63 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
         const taskIds = await service.listTasks(workspaceRoot);
         send(200, { taskIds });
         return;
+      }
+
+      // --- Git-isolated execution API: /executions/:runId/* ---
+      if (req.method === 'POST' && parts[0] === 'executions' && !parts[1]) {
+        const body = (await readJsonBody(req)) as { workspaceRoot: string; taskNames: string[]; baseRef?: string };
+        const run = await service.createExecutionRun(body);
+        send(200, { run });
+        return;
+      }
+
+      if (parts[0] === 'executions' && parts[1]) {
+        const runId = parts[1];
+        if (req.method === 'GET' && !parts[2]) {
+          const workspaceRoot = url.searchParams.get('workspaceRoot') ?? '';
+          const run = await service.getExecutionRun(workspaceRoot, runId);
+          send(200, { run });
+          return;
+        }
+
+        if (req.method === 'POST' && parts[2] === 'tasks' && parts[3] && parts[4] === 'candidates' && !parts[5]) {
+          const body = (await readJsonBody(req)) as { workspaceRoot: string };
+          const candidate = await service.addExecutionCandidate(body.workspaceRoot, runId, parts[3]);
+          send(200, { candidate });
+          return;
+        }
+
+        if (parts[2] === 'tasks' && parts[3] && parts[4] === 'candidates' && parts[5]) {
+          const taskId = parts[3];
+          const candidateId = parts[5];
+          if (req.method === 'GET' && parts[6] === 'diff' && !parts[7]) {
+            const workspaceRoot = url.searchParams.get('workspaceRoot') ?? '';
+            const inspection = await service.inspectExecutionCandidate(workspaceRoot, runId, taskId, candidateId);
+            send(200, { inspection });
+            return;
+          }
+          if (req.method === 'POST' && parts[6] === 'seal' && !parts[7]) {
+            const body = (await readJsonBody(req)) as { workspaceRoot: string };
+            const candidate = await service.sealExecutionCandidate(body.workspaceRoot, runId, taskId, candidateId);
+            send(200, { candidate });
+            return;
+          }
+          if (req.method === 'POST' && parts[6] === 'select' && !parts[7]) {
+            const body = (await readJsonBody(req)) as { workspaceRoot: string };
+            const run = await service.selectExecutionCandidate(body.workspaceRoot, runId, taskId, candidateId);
+            send(200, { run });
+            return;
+          }
+        }
+
+        if (req.method === 'POST' && (parts[2] === 'preview' || parts[2] === 'final') && !parts[3]) {
+          const body = (await readJsonBody(req)) as { workspaceRoot: string; includedTaskIds?: string[] };
+          const result = parts[2] === 'preview'
+            ? await service.buildExecutionPreview(body.workspaceRoot, runId, body.includedTaskIds)
+            : await service.buildExecutionFinal(body.workspaceRoot, runId, body.includedTaskIds);
+          send(200, { result });
+          return;
+        }
       }
 
       send(404, { error: 'not_found' });

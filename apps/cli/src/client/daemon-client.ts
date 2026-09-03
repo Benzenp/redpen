@@ -93,4 +93,43 @@ export class DaemonClient {
   listTasks(workspaceRoot: string) {
     return this.request<{ taskIds: string[] }>('GET', `/tasks?workspaceRoot=${encodeURIComponent(workspaceRoot)}`);
   }
+
+  createExecutionRun(workspaceRoot: string, taskNames: string[], baseRef?: string) {
+    return this.request<{ run: unknown }>('POST', '/executions', { workspaceRoot, taskNames, baseRef });
+  }
+
+  getExecutionRun(runId: string, workspaceRoot: string) {
+    return this.request<{ run: unknown }>('GET', `/executions/${runId}?workspaceRoot=${encodeURIComponent(workspaceRoot)}`);
+  }
+
+  addExecutionCandidate(runId: string, taskId: string, workspaceRoot: string) {
+    return this.request<{ candidate: unknown }>('POST', `/executions/${runId}/tasks/${taskId}/candidates`, { workspaceRoot });
+  }
+
+  inspectExecutionCandidate(runId: string, taskId: string, candidateId: string, workspaceRoot: string) {
+    return this.request<{ inspection: unknown }>(
+      'GET',
+      `/executions/${runId}/tasks/${taskId}/candidates/${candidateId}/diff?workspaceRoot=${encodeURIComponent(workspaceRoot)}`,
+    );
+  }
+
+  sealExecutionCandidate(runId: string, taskId: string, candidateId: string, workspaceRoot: string) {
+    return this.request<{ candidate: unknown }>(
+      'POST',
+      `/executions/${runId}/tasks/${taskId}/candidates/${candidateId}/seal`,
+      { workspaceRoot },
+    );
+  }
+
+  selectExecutionCandidate(runId: string, taskId: string, candidateId: string, workspaceRoot: string) {
+    return this.request<{ run: unknown }>(
+      'POST',
+      `/executions/${runId}/tasks/${taskId}/candidates/${candidateId}/select`,
+      { workspaceRoot },
+    );
+  }
+
+  buildExecutionIntegration(kind: 'preview' | 'final', runId: string, workspaceRoot: string, includedTaskIds?: string[]) {
+    return this.request<{ result: unknown }>('POST', `/executions/${runId}/${kind}`, { workspaceRoot, includedTaskIds });
+  }
 }

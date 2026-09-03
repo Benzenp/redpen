@@ -27,6 +27,14 @@ function flagValue(args: string[], name: string): string | undefined {
   return args[idx + 1];
 }
 
+function flagValues(args: string[], name: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] === name && args[index + 1]) values.push(args[index + 1]);
+  }
+  return values;
+}
+
 function printJson(value: unknown): void {
   process.stdout.write(JSON.stringify(value) + '\n');
 }
@@ -207,6 +215,61 @@ async function main(): Promise<number> {
         return EXIT_CODES.OK;
       }
 
+      case 'execution': {
+        const sub = rest[0];
+        const client = await DaemonClient.connect();
+        let result: unknown;
+        switch (sub) {
+          case 'create': {
+            const taskNames = flagValues(rest, '--task');
+            if (taskNames.length === 0) {
+              printHuman('usage: redpen execution create --task <name> [--task <name> ...] [--base <ref>] [--project <path>] [--json]');
+              return EXIT_CODES.USAGE_ERROR;
+            }
+            result = await client.createExecutionRun(workspaceRoot, taskNames, flagValue(rest, '--base'));
+            break;
+          }
+          case 'show': {
+            const runId = rest[1];
+            if (!runId) return EXIT_CODES.USAGE_ERROR;
+            result = await client.getExecutionRun(runId, workspaceRoot);
+            break;
+          }
+          case 'candidate-add': {
+            const [runId, taskId] = rest.slice(1, 3);
+            if (!runId || !taskId) return EXIT_CODES.USAGE_ERROR;
+            result = await client.addExecutionCandidate(runId, taskId, workspaceRoot);
+            break;
+          }
+          case 'diff':
+          case 'seal':
+          case 'select': {
+            const [runId, taskId, candidateId] = rest.slice(1, 4);
+            if (!runId || !taskId || !candidateId) return EXIT_CODES.USAGE_ERROR;
+            result = sub === 'diff'
+              ? await client.inspectExecutionCandidate(runId, taskId, candidateId, workspaceRoot)
+              : sub === 'seal'
+                ? await client.sealExecutionCandidate(runId, taskId, candidateId, workspaceRoot)
+                : await client.selectExecutionCandidate(runId, taskId, candidateId, workspaceRoot);
+            break;
+          }
+          case 'preview':
+          case 'final': {
+            const runId = rest[1];
+            if (!runId) return EXIT_CODES.USAGE_ERROR;
+            const included = flagValue(rest, '--include')?.split(',').map((value) => value.trim()).filter(Boolean);
+            result = await client.buildExecutionIntegration(sub, runId, workspaceRoot, included);
+            break;
+          }
+          default:
+            printHuman('usage: redpen execution <create|show|candidate-add|diff|seal|select|preview|final> [...] [--json] [--project <path>]');
+            return EXIT_CODES.USAGE_ERROR;
+        }
+        if (json) printJson(result);
+        else printHuman(JSON.stringify(result, null, 2));
+        return EXIT_CODES.OK;
+      }
+
       case 'daemon': {
         const sub = rest[0];
         switch (sub) {
@@ -266,7 +329,7 @@ async function main(): Promise<number> {
 
       default:
         printHuman(
-          'usage: redpen <install|daemon|open|list|status|freeze|submit|wait|claim|review|accept|cancel|close|task|mcp> [...] [--json] [--project <path>]',
+          'usage: redpen <install|daemon|open|list|status|freeze|submit|wait|claim|review|accept|cancel|close|task|execution|mcp> [...] [--json] [--project <path>]',
         );
         return EXIT_CODES.USAGE_ERROR;
     }
