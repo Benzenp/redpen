@@ -47,8 +47,17 @@ async function post(suffix, body) {
   if (!response.ok) throw new Error(`${suffix} failed (${response.status})`);
   return response.json();
 }
+document.querySelector('#rebuild').addEventListener('click', () => {
+  const tasks = selectedTasks();
+  if (tasks.length === 0) { setStatus('Select at least one task.'); return; }
+  void post('/preview-rebuild', { workspaceRoot, includedTaskIds: tasks })
+    .then(() => setStatus('Rebuilding the selected task set in a fresh preview…'))
+    .catch(report);
+});
 document.querySelector('#publish').addEventListener('click', () => {
-  void post('/publish', { workspaceRoot, includedTaskIds: selectedTasks() })
+  const tasks = selectedTasks();
+  if (tasks.length === 0) { setStatus('Select at least one task.'); return; }
+  void post('/publish', { workspaceRoot, includedTaskIds: tasks })
     .then(({ result }) => {
       setStatus(`Published ${result.targetBranch} at ${result.commit.slice(0, 12)}.`);
       const query = new URLSearchParams(); if (token) query.set('token', token);

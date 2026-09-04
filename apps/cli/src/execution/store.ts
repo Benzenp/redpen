@@ -34,7 +34,8 @@ function validateRun(value: unknown): ExecutionRun {
   }
   if (run.finalPublication !== undefined) {
     const publication = run.finalPublication;
-    if (!/^[0-9a-f]{40}$/i.test(publication.commit)
+    if ((publication.state !== 'publishing' && publication.state !== 'published')
+      || !/^[0-9a-f]{40}$/i.test(publication.commit)
       || typeof publication.remote !== 'string'
       || typeof publication.targetBranch !== 'string'
       || !Array.isArray(publication.includedTaskIds)

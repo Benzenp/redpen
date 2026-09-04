@@ -115,6 +115,14 @@ export class RedpenApplicationService {
   private readonly executionCapabilities = new Map<string, string>();
   private readonly executionCandidates = new Map<string, Set<string>>();
   private readonly executionPreviewTasks = new Map<string, string[]>();
+  private readonly executionPreviewLaunches = new Map<string, {
+    workspaceRoot: string;
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+    url: string;
+    readyTimeoutMs?: number;
+  }>();
   private readonly referenceMutationTails = new Map<string, Promise<void>>();
   private readonly lifecycleMutationTails = new Map<string, Promise<void>>();
   private readonly sessionReferenceIds = new Map<string, Set<string>>();
@@ -847,8 +855,9 @@ export class RedpenApplicationService {
         throw new ExecutionError('an integrated preview must be opened before publishing', 'PREVIEW_REQUIRED');
       }
       includedTaskIds ??= [...reviewedTaskIds];
-      if (includedTaskIds.length === 0 || includedTaskIds.some((taskId) => !reviewedTaskIds.includes(taskId))) {
-        throw new ExecutionError('only tasks shown in the integrated preview may be published', 'UNREVIEWED_TASK_SELECTION');
+      if (includedTaskIds.length === 0
+        || JSON.stringify(includedTaskIds) !== JSON.stringify(reviewedTaskIds)) {
+        throw new ExecutionError('the exact selected task set must be rebuilt and reviewed before publishing', 'UNREVIEWED_TASK_SELECTION');
       }
     }
     const result = await this.executions.publishFinal({ ...options, includedTaskIds });
@@ -996,10 +1005,19 @@ export class RedpenApplicationService {
         const session = await this.getSession(task.sessionId);
         if (session.state === 'working') await this.markReviewReady(task.sessionId);
       }
+      this.executionPreviewLaunches.set(run.id, {
+        workspaceRoot: run.workspaceRoot,
+        command: options.command,
+        args: [...options.args],
+        env: options.env ? { ...options.env } : undefined,
+        url: options.url,
+        readyTimeoutMs: options.readyTimeoutMs,
+      });
       return { preview, process, url: options.url, reviewUrl };
     } catch (error) {
       await this.executionProcesses.stop(processId).catch(() => {});
-      await this.candidateStreams.closeAll().catch(() => {});
+      await Promise.allSettled([...(this.executionCandidates.get(options.runId) ?? [])]
+        .map((candidateId) => this.candidateStreams.closeCandidate(candidateId)));
       await this.browser.closeUtilityPage(`preview-${options.runId}`).catch(() => {});
       this.executionCandidates.delete(options.runId);
       this.executionCapabilities.delete(options.runId);
@@ -1017,12 +1035,21 @@ export class RedpenApplicationService {
     return { run, stream, includedTaskIds: this.executionPreviewTasks.get(run.id) ?? [] };
   }
 
+  async rebuildExecutionPreview(workspaceRoot: string, runId: string, includedTaskIds: string[]) {
+    const launch = this.executionPreviewLaunches.get(runId);
+    if (!launch || launch.workspaceRoot !== (await this.executions.getRun(workspaceRoot, runId)).workspaceRoot) {
+      throw new ExecutionError('preview launch configuration is unavailable', 'PREVIEW_REQUIRED');
+    }
+    return this.startExecutionPreview({ ...launch, runId, includedTaskIds });
+  }
+
   async closeExecutionReview(runId: string): Promise<void> {
     await this.browser.closeUtilityPage(`execution-${runId}`).catch(() => {});
     await this.browser.closeUtilityPage(`preview-${runId}`).catch(() => {});
     this.executionCandidates.delete(runId);
     this.executionCapabilities.delete(runId);
     this.executionPreviewTasks.delete(runId);
+    this.executionPreviewLaunches.delete(runId);
   }
 
   async startCandidateComparison(options: {
@@ -1041,6 +1068,12 @@ export class RedpenApplicationService {
     const knownCandidates = new Map(run.tasks.flatMap((task) => task.candidates.map((candidate) => [candidate.id, candidate])));
     const started: string[] = [];
     try {
+      const runCandidateIds = new Set(knownCandidates.keys());
+      await Promise.all(this.executionProcesses.list()
+        .filter((entry) => entry.kind === 'candidate-server'
+          && runCandidateIds.has(entry.id.slice('candidate-'.length))
+          && (entry.status === 'running' || entry.status === 'ready'))
+        .map((entry) => this.executionProcesses.stop(entry.id)));
       for (const requested of options.candidates) {
         const candidate = knownCandidates.get(requested.candidateId);
         if (!candidate) throw new ExecutionError(`candidate not found: ${requested.candidateId}`, 'CANDIDATE_NOT_FOUND');
@@ -1124,7 +1157,7 @@ export class RedpenApplicationService {
     try {
       await this.browser.openUtilityPage(`execution-${runId}`, reviewUrl);
     } catch (error) {
-      await this.candidateStreams.closeAll();
+      await Promise.allSettled([...opened].map((candidateId) => this.candidateStreams.closeCandidate(candidateId)));
       this.executionCandidates.delete(runId);
       this.executionCapabilities.delete(runId);
       throw error;

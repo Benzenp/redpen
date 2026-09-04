@@ -34,6 +34,7 @@ export interface ExecutionRun {
   baseCommit: string;
   sourceTaskId?: string;
   finalPublication?: {
+    state: 'publishing' | 'published';
     commit: string;
     remote: string;
     targetBranch: string;

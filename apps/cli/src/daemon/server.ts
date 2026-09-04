@@ -567,6 +567,14 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
           send(200, { result });
           return;
         }
+        if (req.method === 'POST' && parts[3] === 'preview-rebuild' && !parts[4]) {
+          const body = (await readJsonBody(req)) as { workspaceRoot: string; includedTaskIds: string[] };
+          send(202, { ok: true });
+          setTimeout(() => {
+            void service.rebuildExecutionPreview(body.workspaceRoot, runId, body.includedTaskIds).catch(() => {});
+          }, 100);
+          return;
+        }
         if (req.method === 'POST' && parts[3] === 'review-close' && !parts[4]) {
           send(202, { ok: true });
           setTimeout(() => {
@@ -665,6 +673,11 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
             remote?: string;
           };
           const result = await service.publishExecutionFinal({ ...body, runId });
+          res.once('finish', () => {
+            void service.closeExecutionReview(runId).then(() => {
+              if (service.isIdle()) server.emit('redpenShutdownRequested');
+            });
+          });
           send(200, { result });
           return;
         }

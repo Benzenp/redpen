@@ -242,10 +242,9 @@ export class ExecutionManager {
     const candidate = candidateFor(taskFor(run, options.taskId), options.candidateId);
     this.assertCandidatePath(run, candidate);
     if (candidate.status === 'published') return candidate;
+    for (const command of commands) await this.runVerification(candidate.worktreePath, command);
     let sealed = candidate;
     if (candidate.status === 'draft') {
-      for (const command of commands) await this.runVerification(candidate.worktreePath, command);
-
       const status = (await git(candidate.worktreePath, ['status', '--porcelain'])).trim();
       const headCommit = (await git(candidate.worktreePath, ['rev-parse', 'HEAD'])).trim();
       if (status) {
@@ -323,11 +322,20 @@ export class ExecutionManager {
         && prior.targetBranch === targetBranch
         && JSON.stringify(prior.includedTaskIds) === JSON.stringify(requestedTaskIds);
       if (!sameRequest) throw new ExecutionError('execution was already published with a different selection or target', 'ALREADY_PUBLISHED');
-      const remoteCommit = await this.remoteBranchCommit(run.workspaceRoot, remote, targetBranch);
+      let remoteCommit = await this.remoteBranchCommit(run.workspaceRoot, remote, targetBranch);
+      if (remoteCommit === run.baseCommit && prior.state === 'publishing') {
+        await git(run.workspaceRoot, ['push', remote, `${prior.commit}:refs/heads/${targetBranch}`]);
+        remoteCommit = await this.remoteBranchCommit(run.workspaceRoot, remote, targetBranch);
+      }
       if (remoteCommit !== prior.commit) throw new ExecutionError('published remote target no longer matches the recorded commit', 'REMOTE_VERIFICATION_FAILED');
       const localCommit = (await git(run.workspaceRoot, ['rev-parse', 'HEAD'])).trim();
       if (localCommit === run.baseCommit) await git(run.workspaceRoot, ['merge', '--ff-only', prior.commit]);
       else if (localCommit !== prior.commit) throw new ExecutionError('local target moved after publication', 'BASE_MOVED');
+      if (prior.state !== 'published') {
+        prior.state = 'published';
+        run.updatedAt = now();
+        await this.store.save(run);
+      }
       return {
         branch: `redpen/final/${run.id}`,
         commit: prior.commit,
@@ -349,14 +357,8 @@ export class ExecutionManager {
       if (remoteBefore !== run.baseCommit && remoteBefore !== commit) {
         throw new ExecutionError('remote target branch no longer matches the run base commit', 'BASE_MOVED');
       }
-      if (remoteBefore === run.baseCommit) {
-        await git(run.workspaceRoot, ['push', remote, `refs/heads/${final.branch}:refs/heads/${targetBranch}`]);
-      }
-      const remoteCommit = await this.remoteBranchCommit(run.workspaceRoot, remote, targetBranch);
-      if (remoteCommit !== commit) {
-        throw new ExecutionError('remote target branch does not match the final commit', 'REMOTE_VERIFICATION_FAILED');
-      }
       run.finalPublication = {
+        state: 'publishing',
         commit,
         remote,
         targetBranch,
@@ -364,6 +366,16 @@ export class ExecutionManager {
         commits: [...final.commits],
         publishedAt: now(),
       };
+      run.updatedAt = now();
+      await this.store.save(run);
+      if (remoteBefore === run.baseCommit) {
+        await git(run.workspaceRoot, ['push', remote, `refs/heads/${final.branch}:refs/heads/${targetBranch}`]);
+      }
+      const remoteCommit = await this.remoteBranchCommit(run.workspaceRoot, remote, targetBranch);
+      if (remoteCommit !== commit) {
+        throw new ExecutionError('remote target branch does not match the final commit', 'REMOTE_VERIFICATION_FAILED');
+      }
+      run.finalPublication.state = 'published';
       run.updatedAt = now();
       await this.store.save(run);
       await git(run.workspaceRoot, ['merge', '--ff-only', final.branch]);
