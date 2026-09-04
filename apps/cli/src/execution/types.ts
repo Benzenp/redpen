@@ -1,4 +1,4 @@
-export type CandidateStatus = 'draft' | 'sealed';
+export type CandidateStatus = 'draft' | 'sealed' | 'published';
 
 export interface DiffSummary {
   changedFiles: string[];
@@ -15,11 +15,15 @@ export interface ExecutionCandidate {
   diffSummary?: DiffSummary;
   createdAt: string;
   sealedAt?: string;
+  remote?: string;
+  publishedAt?: string;
 }
 
 export interface ExecutionTask {
   id: string;
   name: string;
+  sourceGroupId?: string;
+  instruction?: string;
   candidates: ExecutionCandidate[];
 }
 
@@ -28,6 +32,15 @@ export interface ExecutionRun {
   id: string;
   workspaceRoot: string;
   baseCommit: string;
+  sourceTaskId?: string;
+  finalPublication?: {
+    commit: string;
+    remote: string;
+    targetBranch: string;
+    includedTaskIds: string[];
+    commits: string[];
+    publishedAt: string;
+  };
   tasks: ExecutionTask[];
   createdAt: string;
   updatedAt: string;
@@ -49,6 +62,15 @@ export interface IntegrationResult {
   commits: string[];
 }
 
+export interface FinalPublishResult {
+  branch: string;
+  commit: string;
+  remote: string;
+  targetBranch: string;
+  includedTaskIds: string[];
+  commits: string[];
+}
+
 export class ExecutionError extends Error {
   constructor(message: string, readonly code: string) {
     super(message);
@@ -63,5 +85,15 @@ export class CherryPickError extends ExecutionError {
   ) {
     super(message, 'CHERRY_PICK_FAILED');
     this.name = 'CherryPickError';
+  }
+}
+
+export class VerificationError extends ExecutionError {
+  constructor(
+    message: string,
+    readonly details: { command: string[]; cwd: string; stdout: string; stderr: string },
+  ) {
+    super(message, 'VERIFICATION_FAILED');
+    this.name = 'VerificationError';
   }
 }

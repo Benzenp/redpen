@@ -131,7 +131,7 @@ function render(run) {
     }
     section.append(heading, grid); tasks.append(section);
   }
-  setStatus('Choose one candidate for each task, then build a preview.');
+  setStatus('Choose one candidate for each task, then save the selections.');
 }
 
 document.querySelector('#apply-selection').addEventListener('click', async () => {
@@ -140,14 +140,7 @@ document.querySelector('#apply-selection').addEventListener('click', async () =>
       const response = await fetch(endpoint('/select'), requestOptions('POST', { workspaceRoot, taskId, candidateId }));
       if (!response.ok) throw new Error(`Selection failed (${response.status})`);
     }
-    setStatus('Candidate selections saved.');
-  } catch (error) { reportError(error); }
-});
-document.querySelector('#build-preview').addEventListener('click', async () => {
-  try {
-    const response = await fetch(endpoint('/preview'), requestOptions('POST', { workspaceRoot }));
-    if (!response.ok) throw new Error(`Preview build failed (${response.status})`);
-    setStatus('Preview build started.');
+    setStatus('Candidate selections saved. The agent can now open the integrated preview.');
   } catch (error) { reportError(error); }
 });
 

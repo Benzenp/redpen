@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Integrated execution preview</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #12151b; color: #edf1f7; }
+    body { margin: 0; } main { max-width: 1500px; margin: auto; padding: 1.5rem; }
+    #status { min-height: 1.5rem; color: #b8c2d1; }
+    .layout { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 1rem; }
+    aside, .viewport { background: #1b2029; border: 1px solid #475569; border-radius: .6rem; padding: 1rem; }
+    label { display: block; padding: .5rem 0; }
+    #preview { display: block; box-sizing: border-box; width: 100%; min-height: 500px; object-fit: contain; background: #080a0e; cursor: crosshair; }
+    button { width: 100%; margin-top: .75rem; padding: .65rem; color: inherit; background: #263244; border: 1px solid #64748b; border-radius: .3rem; cursor: pointer; }
+    button:focus-visible, #preview:focus-visible { outline: 3px solid #7dd3fc; outline-offset: 2px; }
+    @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Integrated preview</h1>
+    <p id="status" role="status" aria-live="polite">Loading preview…</p>
+    <div class="layout">
+      <aside>
+        <h2>Tasks to publish</h2>
+        <div id="task-list"></div>
+        <button id="publish" type="button">Accept and publish</button>
+      </aside>
+      <section class="viewport" aria-label="Interactive integrated preview">
+        <img id="preview" tabindex="0" alt="Live integrated preview">
+      </section>
+    </div>
+  </main>
+  <script type="module" src="/execution-preview.js"></script>
+</body>
+</html>

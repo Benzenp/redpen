@@ -98,6 +98,15 @@ export class DaemonClient {
     return this.request<{ run: unknown }>('POST', '/executions', { workspaceRoot, taskNames, baseRef });
   }
 
+  prepareTaskExecution(workspaceRoot: string, taskId: string, candidatesPerTask = 1, baseRef?: string) {
+    return this.request<{ run: unknown }>('POST', '/executions/prepare', {
+      workspaceRoot,
+      taskId,
+      candidatesPerTask,
+      baseRef,
+    });
+  }
+
   getExecutionRun(runId: string, workspaceRoot: string) {
     return this.request<{ run: unknown }>('GET', `/executions/${runId}?workspaceRoot=${encodeURIComponent(workspaceRoot)}`);
   }
@@ -121,6 +130,24 @@ export class DaemonClient {
     );
   }
 
+  finalizeExecutionCandidate(
+    runId: string,
+    taskId: string,
+    candidateId: string,
+    options: {
+      workspaceRoot: string;
+      commitMessage: string;
+      verificationCommands?: string[][];
+      remote?: string;
+    },
+  ) {
+    return this.request<{ candidate: unknown }>(
+      'POST',
+      `/executions/${runId}/tasks/${taskId}/candidates/${candidateId}/finalize`,
+      options,
+    );
+  }
+
   selectExecutionCandidate(runId: string, taskId: string, candidateId: string, workspaceRoot: string) {
     return this.request<{ run: unknown }>(
       'POST',
@@ -139,5 +166,66 @@ export class DaemonClient {
       `/executions/${runId}/review`,
       { workspaceRoot, candidates },
     );
+  }
+
+  startExecutionAgent(
+    runId: string,
+    options: {
+      workspaceRoot: string;
+      taskId: string;
+      candidateId: string;
+      command: string;
+      args: string[];
+      env?: Record<string, string>;
+    },
+  ) {
+    return this.request<{ process: unknown }>('POST', `/executions/${runId}/agents`, options);
+  }
+
+  getExecutionProcess(runId: string, processId: string) {
+    return this.request<{ process: unknown }>('GET', `/executions/${runId}/processes/${processId}`);
+  }
+
+  waitExecutionProcess(runId: string, processId: string) {
+    return this.request<{ process: unknown }>('POST', `/executions/${runId}/processes/${processId}/wait`);
+  }
+
+  stopExecutionProcess(runId: string, processId: string) {
+    return this.request<{ process: unknown }>('POST', `/executions/${runId}/processes/${processId}/stop`);
+  }
+
+  startExecutionPreview(runId: string, options: {
+    workspaceRoot: string;
+    includedTaskIds?: string[];
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+    url: string;
+    readyTimeoutMs?: number;
+  }) {
+    return this.request<{ preview: unknown; process: unknown; url: string }>('POST', `/executions/${runId}/preview-start`, options);
+  }
+
+  startCandidateComparison(runId: string, options: {
+    workspaceRoot: string;
+    candidates: Array<{
+      candidateId: string;
+      command: string;
+      args: string[];
+      env?: Record<string, string>;
+      url: string;
+      readyTimeoutMs?: number;
+    }>;
+  }) {
+    return this.request<{ review: unknown; processes: unknown[] }>('POST', `/executions/${runId}/compare-start`, options);
+  }
+
+  publishExecutionFinal(runId: string, options: {
+    workspaceRoot: string;
+    includedTaskIds?: string[];
+    targetBranch?: string;
+    remote?: string;
+  }) {
+    return this.request<{ result: unknown }>('POST', `/executions/${runId}/publish`, options);
   }
 }

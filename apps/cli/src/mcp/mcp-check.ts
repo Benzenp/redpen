@@ -14,6 +14,7 @@ import { createRedpenMcpServer } from './server.js';
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { stat, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
@@ -68,6 +69,31 @@ function callTool(client: Client, name: string, args: Record<string, unknown>) {
   return client.callTool({ name, arguments: args });
 }
 
+function run(command: string, args: string[], cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { cwd }, (error) => error ? reject(error) : resolve());
+  });
+}
+
+async function addFixtureMark(appDataDir: string, sessionId: string): Promise<void> {
+  const discovery = JSON.parse(await readFile(path.join(appDataDir, 'redpen', 'daemon.json'), 'utf8')) as { port: number; token: string };
+  const stateResponse = await fetch(`http://127.0.0.1:${discovery.port}/api/sessions/${sessionId}/annotator`, {
+    headers: { Authorization: `Bearer ${discovery.token}` },
+  });
+  const state = await stateResponse.json() as { frameId: string; viewport: { width: number; height: number } };
+  const response = await fetch(`http://127.0.0.1:${discovery.port}/api/sessions/${sessionId}/annotator/marks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${discovery.token}` },
+    body: JSON.stringify({
+      type: 'rectangle',
+      frameId: state.frameId,
+      bounds: { x: 1, y: 1, width: 10, height: 10 },
+      normalizedBounds: { x: 1 / state.viewport.width, y: 1 / state.viewport.height, width: 10 / state.viewport.width, height: 10 / state.viewport.height },
+    }),
+  });
+  if (!response.ok) throw new Error(`could not create fixture mark: ${await response.text()}`);
+}
+
 function parseToolText(result: Awaited<ReturnType<typeof callTool>>): unknown {
   const content = result.content as Array<{ type: string; text?: string }>;
   const textPart = content.find((c) => c.type === 'text');
@@ -87,6 +113,13 @@ async function main() {
   process.env.REDPEN_HEADLESS = '1';
 
   try {
+    await run('git', ['init'], workspaceRoot);
+    await run('git', ['config', 'user.email', 'mcp-check@redpen.local'], workspaceRoot);
+    await run('git', ['config', 'user.name', 'Redpen MCP Check'], workspaceRoot);
+    await writeFile(path.join(workspaceRoot, 'README.md'), 'mcp execution check\n');
+    await run('git', ['add', 'README.md'], workspaceRoot);
+    await run('git', ['commit', '-m', 'initial'], workspaceRoot);
+
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const mcpServer = createRedpenMcpServer();
     await mcpServer.connect(serverTransport);
@@ -97,8 +130,13 @@ async function main() {
     const tools = await client.listTools();
     const toolNames = tools.tools.map((t) => t.name);
     record(
-      'all-six-tools-are-registered',
-      ['redpen_start_session', 'redpen_wait_for_submission', 'redpen_get_task', 'redpen_update_task', 'redpen_open_review', 'redpen_cancel_session'].every(
+      'all-session-and-execution-tools-are-registered',
+      [
+        'redpen_start_session', 'redpen_wait_for_submission', 'redpen_get_task', 'redpen_update_task', 'redpen_open_review', 'redpen_cancel_session',
+        'redpen_prepare_execution', 'redpen_add_candidate', 'redpen_start_candidate_agent', 'redpen_get_execution_process', 'redpen_wait_execution_process',
+        'redpen_stop_execution_process', 'redpen_finalize_candidate', 'redpen_select_candidate', 'redpen_start_preview',
+        'redpen_start_candidate_comparison', 'redpen_publish_execution',
+      ].every(
         (n) => toolNames.includes(n),
       ),
       `tools=${JSON.stringify(toolNames)}`,
@@ -120,6 +158,7 @@ async function main() {
     const { DaemonClient } = await import('../client/daemon-client.js');
     const daemonClient = await DaemonClient.connect();
     await daemonClient.freeze(sessionId);
+    await addFixtureMark(appDataDir, sessionId);
     const submitResult = await daemonClient.submit(sessionId, 'test note from mcp-check');
     const taskId = submitResult.taskId;
 
@@ -128,6 +167,34 @@ async function main() {
     const getTaskJson = parseToolText(getTaskResult) as { task: { id: string; globalNote?: string; groups: unknown[] } };
     record('get-task-returns-the-submitted-task', getTaskJson.task?.id === taskId, `id=${getTaskJson.task?.id}`);
     record('get-task-preserves-the-global-note', getTaskJson.task?.globalNote === 'test note from mcp-check', `note=${getTaskJson.task?.globalNote}`);
+
+    // Execution preparation is the one execution mutation exercised against
+    // the live daemon. It creates the VisualTask-derived task and worktree;
+    // the remaining tool registrations are validated below without launching
+    // arbitrary external agents or preview servers.
+    const prepareResult = await callTool(client, 'redpen_prepare_execution', { task_id: taskId, workspace_root: workspaceRoot });
+    const prepareJson = parseToolText(prepareResult) as { run: { id: string; tasks: Array<{ candidates: unknown[] }> } };
+    record(
+      'prepare-execution-creates-visual-task-worktrees',
+      prepareResult.isError !== true && typeof prepareJson.run?.id === 'string' && prepareJson.run.tasks.length === 1 && prepareJson.run.tasks[0].candidates.length === 1,
+      JSON.stringify(prepareJson),
+    );
+
+    const invalidExecutionCalls = await Promise.all([
+      callTool(client, 'redpen_prepare_execution', { task_id: taskId, workspace_root: workspaceRoot, candidates_per_task: 10 }),
+      callTool(client, 'redpen_start_candidate_agent', { run_id: 'run', task_id: 'task', candidate_id: 'candidate', command: '', args: [] }),
+      callTool(client, 'redpen_start_preview', { run_id: 'run', command: 'node', args: [], url: 'not-a-url', ready_timeout_ms: 0 }),
+      callTool(client, 'redpen_start_candidate_comparison', { run_id: 'run', candidates: [] }),
+      callTool(client, 'redpen_finalize_candidate', { run_id: 'run', task_id: 'task', candidate_id: 'candidate', commit_message: '', verification_commands: [[]] }),
+    ].map(async (call) => {
+      try {
+        const result = await call;
+        return result.isError === true;
+      } catch {
+        return true; // MCP rejects invalid zod input before a tool handler runs.
+      }
+    }));
+    record('execution-tools-reject-out-of-range-inputs-before-launch', invalidExecutionCalls.every(Boolean), JSON.stringify(invalidExecutionCalls));
 
     // --- a second independent MCP client reads the identical task bundle (Codex + Claude parity) ---
     const [clientTransport2, serverTransport2] = InMemoryTransport.createLinkedPair();
@@ -143,10 +210,10 @@ async function main() {
       `taskMatch=${JSON.stringify(getTaskJson2.task) === JSON.stringify(getTaskJson.task)}`,
     );
 
-    // --- update_task: claim -> working ---
-    const updateResult = await callTool(client, 'redpen_update_task', { session_id: sessionId, state: 'working' });
-    const updateJson = parseToolText(updateResult) as { session: { state: string } };
-    record('update-task-working-transitions-session', updateJson.session?.state === 'working', `state=${updateJson.session?.state}`);
+    // Execution preparation is the post-confirmation boundary and claims the
+    // submitted session before any candidate work starts.
+    const claimed = await daemonClient.getSession(sessionId) as { session: { state: string } };
+    record('prepare-execution-transitions-session-to-working', claimed.session.state === 'working', `state=${claimed.session.state}`);
 
     // --- open_review: working -> review ---
     const reviewResult = await callTool(client, 'redpen_open_review', { session_id: sessionId });

@@ -35,6 +35,12 @@ function flagValues(args: string[], name: string): string[] {
   return values;
 }
 
+function jsonFlag<T>(args: string[], name: string): T | undefined {
+  const value = flagValue(args, name);
+  if (value === undefined) return undefined;
+  return JSON.parse(value) as T;
+}
+
 function printJson(value: unknown): void {
   process.stdout.write(JSON.stringify(value) + '\n');
 }
@@ -220,6 +226,20 @@ async function main(): Promise<number> {
         const client = await DaemonClient.connect();
         let result: unknown;
         switch (sub) {
+          case 'prepare': {
+            const taskId = rest[1];
+            if (!taskId) {
+              printHuman('usage: redpen execution prepare <visual-task-id> [--variants <1-9>] [--base <ref>] [--project <path>] [--json]');
+              return EXIT_CODES.USAGE_ERROR;
+            }
+            result = await client.prepareTaskExecution(
+              workspaceRoot,
+              taskId,
+              Number(flagValue(rest, '--variants') ?? '1'),
+              flagValue(rest, '--base'),
+            );
+            break;
+          }
           case 'create': {
             const taskNames = flagValues(rest, '--task');
             if (taskNames.length === 0) {
@@ -278,8 +298,104 @@ async function main(): Promise<number> {
             result = await client.openExecutionReview(runId, workspaceRoot, candidates);
             break;
           }
+          case 'agent-start': {
+            const [runId, taskId, candidateId] = rest.slice(1, 4);
+            const spec = jsonFlag<{ command: string; args?: string[]; env?: Record<string, string> }>(rest, '--spec');
+            if (!runId || !taskId || !candidateId || !spec?.command) {
+              printHuman('usage: redpen execution agent-start <run-id> <task-id> <candidate-id> --spec <json> [--project <path>] [--json]');
+              return EXIT_CODES.USAGE_ERROR;
+            }
+            result = await client.startExecutionAgent(runId, {
+              workspaceRoot,
+              taskId,
+              candidateId,
+              command: spec.command,
+              args: spec.args ?? [],
+              env: spec.env,
+            });
+            break;
+          }
+          case 'process-status':
+          case 'process-wait':
+          case 'process-stop': {
+            const [runId, processId] = rest.slice(1, 3);
+            if (!runId || !processId) return EXIT_CODES.USAGE_ERROR;
+            result = sub === 'process-status'
+              ? await client.getExecutionProcess(runId, processId)
+              : sub === 'process-wait'
+                ? await client.waitExecutionProcess(runId, processId)
+                : await client.stopExecutionProcess(runId, processId);
+            break;
+          }
+          case 'finalize': {
+            const [runId, taskId, candidateId] = rest.slice(1, 4);
+            const message = flagValue(rest, '--message');
+            if (!runId || !taskId || !candidateId || !message) {
+              printHuman('usage: redpen execution finalize <run-id> <task-id> <candidate-id> --message <text> [--verify <json argv[]> ...] [--remote <name>]');
+              return EXIT_CODES.USAGE_ERROR;
+            }
+            result = await client.finalizeExecutionCandidate(runId, taskId, candidateId, {
+              workspaceRoot,
+              commitMessage: message,
+              verificationCommands: flagValues(rest, '--verify').map((value) => JSON.parse(value) as string[]),
+              remote: flagValue(rest, '--remote'),
+            });
+            break;
+          }
+          case 'preview-start': {
+            const runId = rest[1];
+            const spec = jsonFlag<{
+              command: string;
+              args?: string[];
+              env?: Record<string, string>;
+              url: string;
+              readyTimeoutMs?: number;
+            }>(rest, '--spec');
+            if (!runId || !spec?.command || !spec.url) {
+              printHuman('usage: redpen execution preview-start <run-id> --spec <json> [--include <task-id,task-id>] [--project <path>]');
+              return EXIT_CODES.USAGE_ERROR;
+            }
+            result = await client.startExecutionPreview(runId, {
+              workspaceRoot,
+              includedTaskIds: flagValue(rest, '--include')?.split(',').filter(Boolean),
+              command: spec.command,
+              args: spec.args ?? [],
+              env: spec.env,
+              url: spec.url,
+              readyTimeoutMs: spec.readyTimeoutMs,
+            });
+            break;
+          }
+          case 'compare-start': {
+            const runId = rest[1];
+            const candidates = jsonFlag<Array<{
+              candidateId: string;
+              command: string;
+              args: string[];
+              env?: Record<string, string>;
+              url: string;
+              readyTimeoutMs?: number;
+            }>>(rest, '--spec');
+            if (!runId || !Array.isArray(candidates) || candidates.length === 0) {
+              printHuman('usage: redpen execution compare-start <run-id> --spec <json candidates[]> [--project <path>]');
+              return EXIT_CODES.USAGE_ERROR;
+            }
+            result = await client.startCandidateComparison(runId, { workspaceRoot, candidates });
+            break;
+          }
+          case 'publish': {
+            const runId = rest[1];
+            if (!runId) return EXIT_CODES.USAGE_ERROR;
+            result = await client.publishExecutionFinal(runId, {
+              workspaceRoot,
+              includedTaskIds: flagValue(rest, '--include')?.split(',').filter(Boolean),
+              targetBranch: flagValue(rest, '--target'),
+              remote: flagValue(rest, '--remote'),
+            });
+            break;
+          }
           default:
-            printHuman('usage: redpen execution <create|show|candidate-add|diff|seal|select|preview|final|compare> [...] [--json] [--project <path>]');
+            printHuman('usage: redpen execution <prepare|create|show|candidate-add|agent-start|process-status|process-wait|process-stop|diff|seal|finalize|select|preview|preview-start|final|compare|compare-start|publish> [...] [--json] [--project <path>]');
             return EXIT_CODES.USAGE_ERROR;
         }
         if (json) printJson(result);

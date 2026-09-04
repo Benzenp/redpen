@@ -38,6 +38,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.6.0
         version: 1.30.0(zod@3.25.76)
+      cross-spawn:
+        specifier: 7.0.6
+        version: 7.0.6
       pixelmatch:
         specifier: ^5.3.0
         version: 5.3.0
@@ -69,6 +72,9 @@ importers:
       '@redpen/review':
         specifier: workspace:*
         version: link:../../packages/review
+      '@types/cross-spawn':
+        specifier: ^6.0.6
+        version: 6.0.6
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
@@ -349,6 +355,9 @@ packages:
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
+
+  '@types/cross-spawn@6.0.6':
+    resolution: {integrity: sha512-fXRhhUkG4H3TQk5dBhQ7m/JDdSNHKwR2BBia62lhwEIq9xGiQKLxd6LymNhn47SjXhsUEPmxi+PKw2OkW4LLjA==}
 
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
@@ -876,6 +885,10 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@3.25.76)
     transitivePeerDependencies:
       - supports-color
+
+  '@types/cross-spawn@6.0.6':
+    dependencies:
+      '@types/node': 22.20.1
 
   '@types/node@22.20.1':
     dependencies:

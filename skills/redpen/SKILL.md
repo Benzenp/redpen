@@ -11,7 +11,8 @@ license: MIT
 
 Redpen turns a user's visual markup of a running local page into a
 structured task an agent can act on. It never interprets images or writes
-code itself — it only produces the task bundle.
+code itself; after intent confirmation, the coding host executes the task
+through isolated Redpen candidate worktrees.
 
 ## When to use this skill
 
@@ -73,13 +74,41 @@ Agent: for each Instruction Group, summarize intent + likely source
 Agent: present a concise intent confirmation: "제가 이해한 변경은
        1) ... 2) ... 입니다. 이 의도가 맞나요?"
 User: explicitly confirms or corrects the interpretation
-Agent: only after confirmation, set state to working and implement
-Agent: set state to review; Redpen reloads and focuses the still-open target
-       page so the user sees the updated code
+Agent: only after confirmation, call redpen_prepare_execution(task_id,
+       workspace_root). It enters working state after creating the run and
+       worktrees. Preparation alone is not implementation and MUST be followed
+       through.
+Agent: read the returned run tasks and candidate worktree paths. The coding
+       host MUST delegate one subagent per returned candidate worktree when
+       host-native delegation is available. Each subagent receives only its
+       VisualTask instruction group and edits only that worktree — never the
+       parent worktree.
+Agent: if host-native delegation is unavailable, use
+       redpen_start_candidate_agent for each candidate with the configured
+       external agent command, then redpen_wait_execution_process. Its command
+       and args can use {instruction}, {worktree}, {runId}, {taskId}, and
+       {candidateId}; Redpen expands them before launch.
+Agent: run candidate-specific verification in its candidate worktree, then
+       redpen_finalize_candidate(run_id, task_id, candidate_id,
+       commit_message, verification_commands, remote) for every candidate.
+       This verifies, commits, pushes, and remote-verifies; do not treat a
+       local uncommitted edit as a completed candidate.
+Agent: select the finalized default candidate for each task with
+       redpen_select_candidate. For an explicitly requested alternative UI
+       approach only, call redpen_add_candidate on that instruction task,
+       finish and finalize each candidate, then use
+       redpen_start_candidate_comparison with per-candidate server
+       commands/URLs for interactive CDP review.
+Agent: call redpen_start_preview with the selected included task ids and the
+       project's preview command, args, and URL. It builds the integrated
+       branch, starts and readiness-checks an owned server, opens it, and
+       transitions the originating session to review.
 User: accepts the reviewed result
-Agent: set state to done, close the session, stop the daemon when no other
-       Redpen session is active, and stop every target-server process the
-       agent started for this session
+Agent: call redpen_publish_execution(run_id, workspace_root,
+       included_task_ids, target_branch, remote) for only accepted/included
+       tasks. It assembles cleanly, fast-forward merges, pushes, verifies the
+       remote result, transitions the originating session to done, closes it,
+       and cleans up every managed Redpen execution process.
 ```
 
 ## Tools
@@ -101,6 +130,32 @@ Agent: set state to done, close the session, stop the daemon when no other
   `redpen_update_task(session_id, "review")`.
 - `redpen_cancel_session(session_id)` — cancels a session that is no longer
   needed.
+- `redpen_prepare_execution(task_id, workspace_root?, base_ref?,
+  candidates_per_task?)` — turns VisualTask groups into a run, tasks, and
+  isolated candidate worktrees. This is setup, not implementation.
+- `redpen_add_candidate(run_id, task_id, workspace_root?)` — adds one isolated
+  alternative implementation worktree to a specific task.
+- `redpen_start_candidate_agent(run_id, task_id, candidate_id, command, args,
+  env?, workspace_root?)` — fallback managed external-agent runtime. It
+  expands `{instruction}`, `{worktree}`, `{runId}`, `{taskId}`, and
+  `{candidateId}` in `command` and `args`.
+- `redpen_get_execution_process(run_id, process_id)`,
+  `redpen_wait_execution_process(run_id, process_id)`, and
+  `redpen_stop_execution_process(run_id, process_id)` — inspect, wait for,
+  or stop managed agents/servers.
+- `redpen_finalize_candidate(run_id, task_id, candidate_id, commit_message,
+  verification_commands?, remote?, workspace_root?)` — verification, commit,
+  push, and remote verification for one candidate.
+- `redpen_select_candidate(run_id, task_id, candidate_id, workspace_root?)`
+  — picks the finalized candidate to include for a task.
+- `redpen_start_preview(run_id, command, args, url, workspace_root?,
+  included_task_ids?, env?, ready_timeout_ms?)` — builds the selected
+  integration and owns its preview server.
+- `redpen_start_candidate_comparison(run_id, candidates, workspace_root?)` —
+  owns per-candidate servers and opens an interactive CDP comparison review.
+- `redpen_publish_execution(run_id, workspace_root?, included_task_ids?,
+  target_branch?, remote?)` — clean final assembly, fast-forward merge, push,
+  and remote verification.
 
 ## Required lifecycle cleanup
 
@@ -136,6 +191,10 @@ start Redpen again without stale ports or orphaned processes.
      agent for this session.
 - Cancellation and unexpected Chromium closure use the same cleanup sequence,
   except that an already-exited daemon needs no additional stop command.
+- Stop every process returned by `redpen_start_candidate_agent`,
+  `redpen_start_preview`, or `redpen_start_candidate_comparison` with
+  `redpen_stop_execution_process` once its review or execution purpose is
+  complete. Do not stop user-owned processes.
 - Before reporting completion, verify that the owned target port is no longer
   listening, the daemon discovery record is gone, and no owned background job
   or child process remains.
@@ -163,15 +222,16 @@ start Redpen again without stale ports or orphaned processes.
   keeps a mark without a matched element (e.g. a sketch of a brand-new
   component in blank space).
 
-## Default behavior: plan only
+## Confirmation and execution boundary
 
 Submission is never implementation approval by itself. After every submitted
 task, summarize the interpreted intent (one entry per Instruction Group:
 requested result, source/DOM lead, and any ambiguity) and ask the user to
-confirm it. Do not claim the task, edit product files, or run mutating commands
-until that confirmation arrives, even when the user originally said they want
-the eventual fix. Once confirmed, implement without asking for a second
-permission.
+confirm it. Do not claim the task, prepare execution, edit product files, or
+run mutating commands until that confirmation arrives, even when the user
+originally said they want the eventual fix. Once confirmed, complete the
+isolated candidate lifecycle above without a second permission; never directly
+implement in the parent worktree.
 
 ## Setup
 

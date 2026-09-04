@@ -117,6 +117,7 @@ test('execution comparison routes use a run-scoped capability and stream frames'
     const internals = service as unknown as {
       executionCapabilities: Map<string, string>;
       getExecutionReview: () => Promise<unknown>;
+      getExecutionPreviewReview: () => Promise<unknown>;
       subscribeExecutionCandidate: (
         runId: string,
         candidateId: string,
@@ -126,6 +127,10 @@ test('execution comparison routes use a run-scoped capability and stream frames'
     };
     internals.executionCapabilities.set(runId, capability);
     internals.getExecutionReview = async () => ({ id: runId, tasks: [] });
+    internals.getExecutionPreviewReview = async () => ({
+      run: { id: runId, tasks: [] },
+      stream: { candidateId: 'preview-run-test', status: 'streaming' },
+    });
     let unsubscribed = false;
     internals.subscribeExecutionCandidate = (_runId, _candidateId, listener) => {
       setImmediate(() => listener({
@@ -143,8 +148,11 @@ test('execution comparison routes use a run-scoped capability and stream frames'
 
     assert.equal((await fetch(`${base}/execution-review/${runId}`)).status, 401);
     assert.equal((await fetch(`${base}/execution-review/${runId}?token=${capability}`)).status, 200);
+    assert.equal((await fetch(`${base}/execution-preview/${runId}?token=${capability}`)).status, 200);
+    assert.equal((await fetch(`${base}/execution-preview.js`)).status, 200);
     assert.equal((await fetch(`${base}/api/executions/${runId}?workspaceRoot=x&token=wrong`)).status, 401);
     assert.equal((await fetch(`${base}/api/executions/${runId}?workspaceRoot=x&token=${capability}`)).status, 200);
+    assert.equal((await fetch(`${base}/api/executions/${runId}/preview-review?workspaceRoot=x&token=${capability}`)).status, 200);
 
     const events = await fetch(`${base}/api/executions/${runId}/candidates/${candidateId}/events?token=${capability}`);
     assert.equal(events.status, 200);

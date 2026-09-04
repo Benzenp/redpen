@@ -36,6 +36,8 @@ import { compositeMarksOntoScreenshot } from '@redpen/annotator-core/composite';
 import { createRevision } from '@redpen/review';
 import { ExecutionManager } from '../execution/manager.js';
 import { ExecutionError } from '../execution/types.js';
+import { ManagedExecutionProcessManager } from '../execution/process-manager.js';
+import { buildExecutionTaskPlans } from '../execution/task-plan.js';
 
 export class InvalidReferenceImageError extends Error {
   constructor() {
@@ -93,6 +95,7 @@ export class RedpenApplicationService {
   private readonly browser = new BrowserManager();
   private readonly candidateStreams = new CandidateStreamManager(this.browser);
   private readonly executions = new ExecutionManager();
+  private readonly executionProcesses = new ManagedExecutionProcessManager();
   private readonly runtime = new SessionRuntime();
   // In-memory annotator stores keyed by sessionId, mirroring the annotating UI's
   // authoring state until submit. Not persisted — a daemon restart loses drafts
@@ -111,6 +114,7 @@ export class RedpenApplicationService {
   private readonly capabilities = new Map<string, { overlay?: string; annotator?: string }>();
   private readonly executionCapabilities = new Map<string, string>();
   private readonly executionCandidates = new Map<string, Set<string>>();
+  private readonly executionPreviewTasks = new Map<string, string[]>();
   private readonly referenceMutationTails = new Map<string, Promise<void>>();
   private readonly lifecycleMutationTails = new Map<string, Promise<void>>();
   private readonly sessionReferenceIds = new Map<string, Set<string>>();
@@ -751,6 +755,43 @@ export class RedpenApplicationService {
     return this.executions.createRun(options);
   }
 
+  async prepareTaskExecution(options: {
+    workspaceRoot: string;
+    taskId: string;
+    baseRef?: string;
+    candidatesPerTask?: number;
+  }) {
+    const task = await this.getTask(options.workspaceRoot, options.taskId);
+    const session = await this.getSession(task.sessionId);
+    if (session.state !== 'submitted') {
+      throw new ExecutionError(`session must be submitted before execution preparation; current state is ${session.state}`, 'INVALID_SESSION_STATE');
+    }
+    const plans = buildExecutionTaskPlans(task);
+    const candidatesPerTask = options.candidatesPerTask ?? 1;
+    if (!Number.isInteger(candidatesPerTask) || candidatesPerTask < 1 || candidatesPerTask > 9) {
+      throw new ExecutionError('candidates per task must be between 1 and 9', 'INVALID_CANDIDATE_COUNT');
+    }
+
+    const run = await this.executions.createRun({
+      workspaceRoot: options.workspaceRoot,
+      sourceTaskId: task.id,
+      baseRef: options.baseRef,
+      tasks: plans,
+    });
+    try {
+      for (const executionTask of run.tasks) {
+        for (let index = 0; index < candidatesPerTask; index++) {
+          await this.executions.addCandidate(run.workspaceRoot, run.id, executionTask.id);
+        }
+      }
+      await this.claim(task.sessionId);
+      return this.executions.getRun(run.workspaceRoot, run.id);
+    } catch (error) {
+      await this.executions.discardRun(run.workspaceRoot, run.id).catch(() => {});
+      throw error;
+    }
+  }
+
   async getExecutionRun(workspaceRoot: string, runId: string) {
     return this.executions.getRun(workspaceRoot, runId);
   }
@@ -779,6 +820,259 @@ export class RedpenApplicationService {
     return this.executions.buildFinal(workspaceRoot, runId, includedTaskIds);
   }
 
+  async finalizeExecutionCandidate(options: {
+    workspaceRoot: string;
+    runId: string;
+    taskId: string;
+    candidateId: string;
+    commitMessage: string;
+    verificationCommands?: string[][];
+    remote?: string;
+  }) {
+    return this.executions.finalizeCandidate(options);
+  }
+
+  async publishExecutionFinal(options: {
+    workspaceRoot: string;
+    runId: string;
+    includedTaskIds?: string[];
+    targetBranch?: string;
+    remote?: string;
+  }) {
+    const executionRun = await this.executions.getRun(options.workspaceRoot, options.runId);
+    let includedTaskIds = options.includedTaskIds;
+    if (executionRun.sourceTaskId) {
+      const reviewedTaskIds = this.executionPreviewTasks.get(executionRun.id);
+      if (!reviewedTaskIds) {
+        throw new ExecutionError('an integrated preview must be opened before publishing', 'PREVIEW_REQUIRED');
+      }
+      includedTaskIds ??= [...reviewedTaskIds];
+      if (includedTaskIds.length === 0 || includedTaskIds.some((taskId) => !reviewedTaskIds.includes(taskId))) {
+        throw new ExecutionError('only tasks shown in the integrated preview may be published', 'UNREVIEWED_TASK_SELECTION');
+      }
+    }
+    const result = await this.executions.publishFinal({ ...options, includedTaskIds });
+    const cleanupWarnings: string[] = [];
+    try {
+      if (executionRun.sourceTaskId) {
+        const task = await this.getTask(executionRun.workspaceRoot, executionRun.sourceTaskId);
+        const session = await this.getSession(task.sessionId);
+        if (session.state === 'review') await this.accept(task.sessionId);
+        const completed = await this.getSession(task.sessionId);
+        if (completed.state === 'done') await this.closeSession(task.sessionId);
+      }
+    } catch (error) {
+      cleanupWarnings.push(`session cleanup failed after publish: ${(error as Error).message}`);
+    }
+    try {
+      const candidateIds = executionRun.tasks.flatMap((task) => task.candidates.map((candidate) => candidate.id));
+      const processIds = [
+        `preview-${executionRun.id}`,
+        ...candidateIds.flatMap((candidateId) => [`agent-${candidateId}`, `candidate-${candidateId}`]),
+      ];
+      await Promise.all(processIds
+        .filter((processId) => this.executionProcesses.get(processId) !== undefined)
+        .map((processId) => this.executionProcesses.stop(processId)));
+    } catch (error) {
+      cleanupWarnings.push(`process cleanup failed after publish: ${(error as Error).message}`);
+    }
+    try {
+      await Promise.all([...(this.executionCandidates.get(executionRun.id) ?? [])]
+        .map((candidateId) => this.candidateStreams.closeCandidate(candidateId)));
+    } catch (error) {
+      cleanupWarnings.push(`stream cleanup failed after publish: ${(error as Error).message}`);
+    }
+    return cleanupWarnings.length === 0 ? result : { ...result, cleanupWarnings };
+  }
+
+  async startExecutionAgent(options: {
+    workspaceRoot: string;
+    runId: string;
+    taskId: string;
+    candidateId: string;
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+  }) {
+    const run = await this.executions.getRun(options.workspaceRoot, options.runId);
+    const task = run.tasks.find((entry) => entry.id === options.taskId);
+    const candidate = task?.candidates.find((entry) => entry.id === options.candidateId);
+    if (!task) throw new ExecutionError(`task not found: ${options.taskId}`, 'TASK_NOT_FOUND');
+    if (!candidate) throw new ExecutionError(`candidate not found: ${options.candidateId}`, 'CANDIDATE_NOT_FOUND');
+    if (candidate.status !== 'draft') throw new ExecutionError('only draft candidates can run an agent', 'CANDIDATE_NOT_DRAFT');
+    const substitutions: Record<string, string> = {
+      '{instruction}': task.instruction ?? task.name,
+      '{worktree}': candidate.worktreePath,
+      '{runId}': run.id,
+      '{taskId}': task.id,
+      '{candidateId}': candidate.id,
+    };
+    const expand = (value: string) => Object.entries(substitutions)
+      .reduce((expanded, [placeholder, replacement]) => expanded.replaceAll(placeholder, replacement), value);
+    return this.executionProcesses.start({
+      id: `agent-${candidate.id}`,
+      kind: 'agent',
+      cwd: candidate.worktreePath,
+      command: expand(options.command),
+      args: options.args.map(expand),
+      env: {
+        ...options.env,
+        REDPEN_RUN_ID: run.id,
+        REDPEN_TASK_ID: task.id,
+        REDPEN_CANDIDATE_ID: candidate.id,
+        REDPEN_INSTRUCTION: task.instruction ?? task.name,
+      },
+    });
+  }
+
+  getExecutionProcess(processId: string) {
+    const process = this.executionProcesses.get(processId);
+    if (!process) throw new ExecutionError(`execution process not found: ${processId}`, 'PROCESS_NOT_FOUND');
+    return process;
+  }
+
+  async waitExecutionProcess(processId: string) {
+    return this.executionProcesses.wait(processId);
+  }
+
+  async stopExecutionProcess(processId: string) {
+    return this.executionProcesses.stop(processId);
+  }
+
+  async startExecutionPreview(options: {
+    workspaceRoot: string;
+    runId: string;
+    includedTaskIds?: string[];
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+    url: string;
+    readyTimeoutMs?: number;
+  }) {
+    if (!this.selfOrigin) throw new Error('daemon origin is unavailable');
+    const processId = `preview-${options.runId}`;
+    const existing = this.executionProcesses.get(processId);
+    if (existing && (existing.status === 'running' || existing.status === 'ready')) {
+      await this.executionProcesses.stop(processId);
+    }
+    for (const candidateId of this.executionCandidates.get(options.runId) ?? []) {
+      await this.candidateStreams.closeCandidate(candidateId);
+    }
+    await this.browser.closeUtilityPage(`preview-${options.runId}`).catch(() => {});
+    this.executionCandidates.delete(options.runId);
+    this.executionCapabilities.delete(options.runId);
+    this.executionPreviewTasks.delete(options.runId);
+    const preview = await this.executions.buildPreview(options.workspaceRoot, options.runId, options.includedTaskIds);
+    const process = await this.executionProcesses.start({
+      id: processId,
+      kind: 'preview-server',
+      cwd: preview.worktreePath,
+      command: options.command,
+      args: options.args,
+      env: options.env,
+      readyUrl: options.url,
+      readyTimeoutMs: options.readyTimeoutMs,
+    });
+    try {
+      const run = await this.executions.getRun(options.workspaceRoot, options.runId);
+      const runCandidateIds = new Set(run.tasks.flatMap((task) => task.candidates.map((candidate) => candidate.id)));
+      await Promise.all(this.executionProcesses.list()
+        .filter((entry) => entry.kind === 'candidate-server'
+          && runCandidateIds.has(entry.id.slice('candidate-'.length))
+          && (entry.status === 'running' || entry.status === 'ready'))
+        .map((entry) => this.executionProcesses.stop(entry.id)));
+      await this.browser.closeUtilityPage(`execution-${run.id}`).catch(() => {});
+      const streamId = `preview-${run.id}`;
+      await this.candidateStreams.openCandidate(streamId, options.url);
+      this.executionCandidates.set(run.id, new Set([streamId]));
+      this.executionPreviewTasks.set(run.id, [...preview.includedTaskIds]);
+      const capability = randomUUID();
+      this.executionCapabilities.set(run.id, capability);
+      const query = new URLSearchParams({ workspaceRoot: run.workspaceRoot, token: capability });
+      const reviewUrl = `http://127.0.0.1:${this.selfOrigin.port}/execution-preview/${encodeURIComponent(run.id)}?${query}`;
+      await this.browser.openUtilityPage(`preview-${run.id}`, reviewUrl);
+      if (run.sourceTaskId) {
+        const task = await this.getTask(run.workspaceRoot, run.sourceTaskId);
+        const session = await this.getSession(task.sessionId);
+        if (session.state === 'working') await this.markReviewReady(task.sessionId);
+      }
+      return { preview, process, url: options.url, reviewUrl };
+    } catch (error) {
+      await this.executionProcesses.stop(processId).catch(() => {});
+      await this.candidateStreams.closeAll().catch(() => {});
+      await this.browser.closeUtilityPage(`preview-${options.runId}`).catch(() => {});
+      this.executionCandidates.delete(options.runId);
+      this.executionCapabilities.delete(options.runId);
+      this.executionPreviewTasks.delete(options.runId);
+      throw error;
+    }
+  }
+
+  async getExecutionPreviewReview(workspaceRoot: string, runId: string) {
+    const run = await this.executions.getRun(workspaceRoot, runId);
+    const streamId = `preview-${run.id}`;
+    this.assertExecutionCandidate(run.id, streamId);
+    const stream = this.candidateStreams.getCandidate(streamId);
+    if (!stream) throw new ExecutionError('integrated preview stream is unavailable', 'CANDIDATE_NOT_FOUND');
+    return { run, stream, includedTaskIds: this.executionPreviewTasks.get(run.id) ?? [] };
+  }
+
+  async closeExecutionReview(runId: string): Promise<void> {
+    await this.browser.closeUtilityPage(`execution-${runId}`).catch(() => {});
+    await this.browser.closeUtilityPage(`preview-${runId}`).catch(() => {});
+    this.executionCandidates.delete(runId);
+    this.executionCapabilities.delete(runId);
+    this.executionPreviewTasks.delete(runId);
+  }
+
+  async startCandidateComparison(options: {
+    workspaceRoot: string;
+    runId: string;
+    candidates: Array<{
+      candidateId: string;
+      command: string;
+      args: string[];
+      env?: Record<string, string>;
+      url: string;
+      readyTimeoutMs?: number;
+    }>;
+  }) {
+    const run = await this.executions.getRun(options.workspaceRoot, options.runId);
+    const knownCandidates = new Map(run.tasks.flatMap((task) => task.candidates.map((candidate) => [candidate.id, candidate])));
+    const started: string[] = [];
+    try {
+      for (const requested of options.candidates) {
+        const candidate = knownCandidates.get(requested.candidateId);
+        if (!candidate) throw new ExecutionError(`candidate not found: ${requested.candidateId}`, 'CANDIDATE_NOT_FOUND');
+        const processId = `candidate-${candidate.id}`;
+        const existing = this.executionProcesses.get(processId);
+        if (existing && (existing.status === 'running' || existing.status === 'ready')) {
+          await this.executionProcesses.stop(processId);
+        }
+        await this.executionProcesses.start({
+          id: processId,
+          kind: 'candidate-server',
+          cwd: candidate.worktreePath,
+          command: requested.command,
+          args: requested.args,
+          env: requested.env,
+          readyUrl: requested.url,
+          readyTimeoutMs: requested.readyTimeoutMs,
+        });
+        started.push(processId);
+      }
+      const review = await this.openExecutionReview(
+        run.workspaceRoot,
+        run.id,
+        options.candidates.map(({ candidateId, url }) => ({ candidateId, url })),
+      );
+      return { review, processes: started.map((id) => this.getExecutionProcess(id)) };
+    } catch (error) {
+      await Promise.allSettled(started.map((id) => this.executionProcesses.stop(id)));
+      throw error;
+    }
+  }
+
   hasExecutionCapability(runId: string, capability: string | null): boolean {
     return Boolean(capability) && this.executionCapabilities.get(runId) === capability;
   }
@@ -794,17 +1088,23 @@ export class RedpenApplicationService {
       throw new ExecutionError('execution review requires between 1 and 9 candidate URLs', 'INVALID_REVIEW_CANDIDATES');
     }
     const knownCandidates = new Set(
-      run.tasks.flatMap((task) => task.candidates.filter((candidate) => candidate.status === 'sealed').map((candidate) => candidate.id)),
+      run.tasks.flatMap((task) => task.candidates
+        .filter((candidate) => candidate.status === 'sealed' || candidate.status === 'published')
+        .map((candidate) => candidate.id)),
     );
     const requestedIds = candidateUrls.map((candidate) => candidate.candidateId);
     if (new Set(requestedIds).size !== requestedIds.length || requestedIds.some((id) => !knownCandidates.has(id))) {
       throw new ExecutionError('execution review contains an unknown or duplicate candidate', 'INVALID_REVIEW_CANDIDATES');
     }
 
-    await this.candidateStreams.closeAll();
-    await Promise.all([...this.executionCandidates.keys()].map((id) => this.browser.closeUtilityPage(`execution-${id}`)));
-    this.executionCandidates.clear();
-    this.executionCapabilities.clear();
+    for (const candidateId of this.executionCandidates.get(runId) ?? []) {
+      await this.candidateStreams.closeCandidate(candidateId);
+    }
+    await this.browser.closeUtilityPage(`execution-${runId}`).catch(() => {});
+    await this.browser.closeUtilityPage(`preview-${runId}`).catch(() => {});
+    this.executionCandidates.delete(runId);
+    this.executionCapabilities.delete(runId);
+    this.executionPreviewTasks.delete(runId);
     const opened = new Set<string>();
     try {
       for (const candidate of candidateUrls) {
@@ -959,6 +1259,7 @@ export class RedpenApplicationService {
   async shutdown(): Promise<void> {
     await Promise.allSettled(this.closeOperations.values());
     this.runtime.clear();
+    await this.executionProcesses.stopAll();
     await this.candidateStreams.closeAll();
     await this.browser.closeAll();
   }

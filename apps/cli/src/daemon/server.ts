@@ -173,11 +173,25 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
         return;
       }
 
+      if (req.method === 'GET' && parts[0] === 'execution-preview.js' && !parts[1]) {
+        const js = await readFile(path.join(annotatorPublicDir, 'execution-preview.js'));
+        res.writeHead(200, {
+          'Content-Type': STATIC_CONTENT_TYPES['.js'],
+          'Cache-Control': 'no-store',
+          'Referrer-Policy': 'no-referrer',
+        });
+        res.end(js);
+        return;
+      }
+
       const isOverlayFreezeRoute = req.method === 'POST' && parts[0] === 'sessions' && parts[1] !== undefined && parts[2] === 'freeze';
       const isOverlayStatusRoute = req.method === 'GET' && parts[0] === 'sessions' && parts[1] !== undefined && !parts[2];
       const isAnnotatorTabRoute = req.method === 'GET' && parts[0] === 'annotator' && parts[1] !== undefined && !parts[2];
       const isAnnotatorApiRoute = parts[0] === 'api' && parts[1] === 'sessions' && parts[2] !== undefined && parts[3] === 'annotator';
-      const isExecutionReviewRoute = req.method === 'GET' && parts[0] === 'execution-review' && parts[1] !== undefined && !parts[2];
+      const isExecutionReviewRoute = req.method === 'GET'
+        && (parts[0] === 'execution-review' || parts[0] === 'execution-preview')
+        && parts[1] !== undefined
+        && !parts[2];
       const isExecutionApiRoute = parts[0] === 'api' && parts[1] === 'executions' && parts[2] !== undefined;
       const browserSessionId = isOverlayFreezeRoute || isOverlayStatusRoute
         ? parts[1]
@@ -234,6 +248,17 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
 
       if (req.method === 'GET' && parts[0] === 'execution-review' && parts[1]) {
         const html = await readFile(path.join(annotatorPublicDir, 'execution-review.html'), 'utf8');
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Referrer-Policy': 'no-referrer',
+        });
+        res.end(html);
+        return;
+      }
+
+      if (req.method === 'GET' && parts[0] === 'execution-preview' && parts[1]) {
+        const html = await readFile(path.join(annotatorPublicDir, 'execution-preview.html'), 'utf8');
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'no-store',
@@ -481,6 +506,12 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
       // --- Interactive candidate comparison API ---
       if (parts[0] === 'api' && parts[1] === 'executions' && parts[2]) {
         const runId = parts[2];
+        if (req.method === 'GET' && parts[3] === 'preview-review' && !parts[4]) {
+          const workspaceRoot = url.searchParams.get('workspaceRoot') ?? '';
+          const preview = await service.getExecutionPreviewReview(workspaceRoot, runId);
+          send(200, preview);
+          return;
+        }
         if (req.method === 'GET' && !parts[3]) {
           const workspaceRoot = url.searchParams.get('workspaceRoot') ?? '';
           const run = await service.getExecutionReview(workspaceRoot, runId);
@@ -525,9 +556,41 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
           send(200, { result });
           return;
         }
+        if (req.method === 'POST' && parts[3] === 'publish' && !parts[4]) {
+          const body = (await readJsonBody(req)) as {
+            workspaceRoot: string;
+            includedTaskIds?: string[];
+            targetBranch?: string;
+            remote?: string;
+          };
+          const result = await service.publishExecutionFinal({ ...body, runId });
+          send(200, { result });
+          return;
+        }
+        if (req.method === 'POST' && parts[3] === 'review-close' && !parts[4]) {
+          send(202, { ok: true });
+          setTimeout(() => {
+            void service.closeExecutionReview(runId).then(() => {
+              if (service.isIdle()) server.emit('redpenShutdownRequested');
+            });
+          }, 100);
+          return;
+        }
       }
 
       // --- Git-isolated execution API: /executions/:runId/* ---
+      if (req.method === 'POST' && parts[0] === 'executions' && parts[1] === 'prepare' && !parts[2]) {
+        const body = (await readJsonBody(req)) as {
+          workspaceRoot: string;
+          taskId: string;
+          baseRef?: string;
+          candidatesPerTask?: number;
+        };
+        const run = await service.prepareTaskExecution(body);
+        send(200, { run });
+        return;
+      }
+
       if (req.method === 'POST' && parts[0] === 'executions' && !parts[1]) {
         const body = (await readJsonBody(req)) as { workspaceRoot: string; taskNames: string[]; baseRef?: string };
         const run = await service.createExecutionRun(body);
@@ -537,6 +600,74 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
 
       if (parts[0] === 'executions' && parts[1]) {
         const runId = parts[1];
+        if (req.method === 'POST' && parts[2] === 'agents' && !parts[3]) {
+          const body = (await readJsonBody(req)) as {
+            workspaceRoot: string;
+            taskId: string;
+            candidateId: string;
+            command: string;
+            args: string[];
+            env?: Record<string, string>;
+          };
+          const process = await service.startExecutionAgent({ ...body, runId });
+          send(200, { process });
+          return;
+        }
+        if (parts[2] === 'processes' && parts[3]) {
+          if (req.method === 'GET' && !parts[4]) {
+            send(200, { process: service.getExecutionProcess(parts[3]) });
+            return;
+          }
+          if (req.method === 'POST' && parts[4] === 'wait' && !parts[5]) {
+            send(200, { process: await service.waitExecutionProcess(parts[3]) });
+            return;
+          }
+          if (req.method === 'POST' && parts[4] === 'stop' && !parts[5]) {
+            send(200, { process: await service.stopExecutionProcess(parts[3]) });
+            return;
+          }
+        }
+        if (req.method === 'POST' && parts[2] === 'preview-start' && !parts[3]) {
+          const body = (await readJsonBody(req)) as {
+            workspaceRoot: string;
+            includedTaskIds?: string[];
+            command: string;
+            args: string[];
+            env?: Record<string, string>;
+            url: string;
+            readyTimeoutMs?: number;
+          };
+          const preview = await service.startExecutionPreview({ ...body, runId });
+          send(200, preview);
+          return;
+        }
+        if (req.method === 'POST' && parts[2] === 'compare-start' && !parts[3]) {
+          const body = (await readJsonBody(req)) as {
+            workspaceRoot: string;
+            candidates: Array<{
+              candidateId: string;
+              command: string;
+              args: string[];
+              env?: Record<string, string>;
+              url: string;
+              readyTimeoutMs?: number;
+            }>;
+          };
+          const comparison = await service.startCandidateComparison({ ...body, runId });
+          send(200, comparison);
+          return;
+        }
+        if (req.method === 'POST' && parts[2] === 'publish' && !parts[3]) {
+          const body = (await readJsonBody(req)) as {
+            workspaceRoot: string;
+            includedTaskIds?: string[];
+            targetBranch?: string;
+            remote?: string;
+          };
+          const result = await service.publishExecutionFinal({ ...body, runId });
+          send(200, { result });
+          return;
+        }
         if (req.method === 'POST' && parts[2] === 'review' && !parts[3]) {
           const body = (await readJsonBody(req)) as {
             workspaceRoot: string;
@@ -572,6 +703,22 @@ export async function startDaemon(port = 0): Promise<StartedDaemon> {
           if (req.method === 'POST' && parts[6] === 'seal' && !parts[7]) {
             const body = (await readJsonBody(req)) as { workspaceRoot: string };
             const candidate = await service.sealExecutionCandidate(body.workspaceRoot, runId, taskId, candidateId);
+            send(200, { candidate });
+            return;
+          }
+          if (req.method === 'POST' && parts[6] === 'finalize' && !parts[7]) {
+            const body = (await readJsonBody(req)) as {
+              workspaceRoot: string;
+              commitMessage: string;
+              verificationCommands?: string[][];
+              remote?: string;
+            };
+            const candidate = await service.finalizeExecutionCandidate({
+              ...body,
+              runId,
+              taskId,
+              candidateId,
+            });
             send(200, { candidate });
             return;
           }

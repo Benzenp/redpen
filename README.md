@@ -173,26 +173,30 @@ redpen accept <session-id>
 redpen cancel <session-id>
 redpen close <session-id> [--shutdown-if-idle]
 
-redpen execution create --task "header" --task "chart" --project <workspace>
+redpen execution prepare <visual-task-id> [--variants <1-9>] --project <workspace>
 redpen execution candidate-add <run-id> <task-id> --project <workspace>
-redpen execution diff <run-id> <task-id> <candidate-id> --project <workspace>
-redpen execution seal <run-id> <task-id> <candidate-id> --project <workspace>
+redpen execution agent-start <run-id> <task-id> <candidate-id> --spec <json>
+redpen execution process-wait <run-id> <process-id>
+redpen execution finalize <run-id> <task-id> <candidate-id> --message <text> [--verify <json-argv> ...]
 redpen execution select <run-id> <task-id> <candidate-id> --project <workspace>
-redpen execution preview <run-id> [--include <task-id,task-id>] --project <workspace>
-redpen execution final <run-id> [--include <task-id,task-id>] --project <workspace>
-redpen execution compare <run-id> --candidate <candidate-id>=<localhost-url> [--candidate ...] --project <workspace>
+redpen execution preview-start <run-id> --spec <json> [--include <task-id,task-id>]
+redpen execution compare-start <run-id> --spec <json-candidates>
+redpen execution publish <run-id> [--include <task-id,task-id>] [--target <branch>] [--remote <name>]
 
 redpen mcp
 ```
 
 Add `--json` for machine-readable output.
 
-Execution runs pin a base commit, create one isolated Git branch and worktree per
-candidate, and require each candidate to be sealed as one clean commit. Preview
-and final worktrees are rebuilt from the pinned base by cherry-picking the
-selected candidates in task order. `execution compare` opens up to nine
-interactive Chromium views in one review page using CDP screencasts, so it is
-not blocked by iframe CSP or `X-Frame-Options`.
+Execution preparation converts submitted instruction groups into isolated Git
+branches and worktrees and moves the originating session to `working`. Agents
+run in those worktrees; finalization runs argv-only verification commands,
+commits, pushes, and verifies each remote candidate. Preview assembles selected
+commits, owns its dev-server process, and moves the session to `review`.
+Publishing rebuilds only accepted tasks, fast-forward merges the unchanged base,
+pushes without force, verifies the remote commit, closes the session, and stops
+owned execution processes. Alternative candidates can be displayed as up to
+nine interactive CDP screencasts without iframe restrictions.
 
 ### Browser mode
 
